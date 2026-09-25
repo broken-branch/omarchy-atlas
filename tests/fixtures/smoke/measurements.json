@@ -1,0 +1,1 @@
+{"settleMs":[17,10,25,14,12],"frameIntervalsMs":[16,18,15,17,20,16,14],"pins":{"before":1,"after":1,"unchanged":true},"converged":{"cooled":true,"settleMs":917,"settleReason":null},"capped":{"cooled":true,"settleMs":null,"settleReason":"cooldown-cap"}}

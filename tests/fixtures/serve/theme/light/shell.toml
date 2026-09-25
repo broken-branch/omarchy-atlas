@@ -1,0 +1,19 @@
+[hyprland]
+foreground = "#181818"
+
+[font]
+base-size = 14
+
+[spacing]
+scale = 1.0
+scale-with-font = true
+
+[controls]
+normal-color = "hyprland.foreground"
+normal-fill-alpha = 0.04
+normal-border = "hyprland.foreground"
+normal-border-alpha = 0.4
+hover-cursor-color = "hyprland.foreground"
+hover-cursor-fill-alpha = 0.08
+focus-border = "hyprland.foreground"
+focus-border-alpha = 0.25

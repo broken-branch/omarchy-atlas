@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.broken-branch.atlas",
+  "name": "Atlas",
+  "version": "1.0.0",
+  "author": "broken-branch",
+  "license": "MIT",
+  "description": "Maps the Markdown files in folders you register: links between them, files nothing links to, broken links, docs older than the code they describe, and the size of AI agent instruction files. Bar popup, browser reader and map, and a CLI for CI. Read-only.",
+  "kinds": [
+    "bar-widget",
+    "service"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml",
+    "service": "Service.qml"
+  },
+  "barWidget": {
+    "displayName": "Atlas",
+    "description": "Search registered folders, see unlinked files, broken links and stale docs, and open files in the reader.",
+    "defaultSection": "right"
+  }
+}

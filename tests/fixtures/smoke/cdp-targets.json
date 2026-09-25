@@ -1,0 +1,5 @@
+[
+  {"id":"worker","type":"worker","url":"http://127.0.0.1:4137/"},
+  {"id":"other","type":"page","url":"https://example.test/"},
+  {"id":"atlas","type":"page","url":"http://127.0.0.1:4137/map","webSocketDebuggerUrl":"ws://127.0.0.1/devtools/page/atlas"}
+]

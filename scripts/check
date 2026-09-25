@@ -1,0 +1,144 @@
+#!/bin/sh
+set -eu
+
+project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$project_root"
+
+fail() {
+  printf '%s\n' "check: $*" >&2
+  exit 1
+}
+
+note_unavailable() {
+  printf '%s\n' "check: unavailable outside desktop CI: $*" >&2
+}
+
+desktop_ci=false
+case "${ATLAS_DESKTOP_CI:-}" in
+  ''|0|false|False|FALSE|no|No|NO) ;;
+  *) desktop_ci=true ;;
+esac
+
+for doc in README.md CONTRIBUTING.md docs/index.md docs/stack.md \
+  docs/features.md docs/contract.md; do
+  [ -f "$doc" ] || fail "$doc is missing"
+done
+# compile() checks syntax without creating __pycache__ beside fixtures.
+python3 -B - "$project_root" <<'PYTHON_EOF' || fail "Python syntax check failed"
+from pathlib import Path
+import sys
+import tokenize
+
+root = Path(sys.argv[1])
+for path in sorted(root.rglob("*.py")):
+    if ".git" in path.parts:
+        continue
+    with tokenize.open(path) as source_file:
+        compile(source_file.read(), str(path.relative_to(root)), "exec")
+PYTHON_EOF
+
+qml_files=$(find . -path ./.git -prune -o -type f -name '*.qml' -print 2>/dev/null || true)
+if [ -n "$qml_files" ]; then
+  qml_separator=$(printf '%s\n' "$qml_files" | while IFS= read -r qml_file; do
+    awk '/}; *[A-Z][A-Za-z]* *\{/ { printf "%s:%d:%s\n", FILENAME, NR, $0; exit }' "$qml_file"
+  done)
+  [ -z "$qml_separator" ] || fail "QML object separator found: $qml_separator"
+fi
+
+if [ -d tests ] && find tests -type f \( -name 'test*.py' -o -name '*_test.py' \) -print -quit | grep -q .; then
+  python3 -B -m unittest discover -s tests
+fi
+if [ -d tests/smoke ] && find tests/smoke -type f -name 'test_*.py' -print -quit | grep -q .; then
+  python3 -B -m unittest discover -s tests/smoke -p 'test_*.py'
+fi
+if [ -d tests ] && find tests -type f -name '*.test.js' -print -quit | grep -q .; then
+  find tests -type f -name '*.test.js' -exec node --test {} +
+fi
+
+find bin scripts -type f -maxdepth 1 2>/dev/null | sort | while IFS= read -r shell_file; do
+  case "$(head -n 1 "$shell_file")" in
+    '#!/bin/bash'|'#!/usr/bin/env bash') bash -n "$shell_file" ;;
+    '#!/bin/sh'|'#!/usr/bin/env sh') sh -n "$shell_file" ;;
+  esac
+done
+
+if [ -f manifest.json ]; then
+  python3 -B - manifest.json <<'MANIFEST_EOF' || fail "manifest.json does not match the plugin contract"
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as manifest_file:
+    manifest = json.load(manifest_file)
+
+valid = (
+    manifest.get("schemaVersion") == 1
+    and manifest.get("id") == "io.github.broken-branch.atlas"
+    and manifest.get("kinds") == ["bar-widget", "service"]
+    and manifest.get("entryPoints") == {"barWidget": "Panel.qml", "service": "Service.qml"}
+    and manifest.get("barWidget", {}).get("defaultSection") == "right"
+)
+raise SystemExit(0 if valid else 1)
+MANIFEST_EOF
+
+  if command -v omarchy-plugin-validate >/dev/null 2>&1; then
+    omarchy-plugin-validate "$project_root" || fail "omarchy plugin validate rejected this checkout"
+  elif "$desktop_ci"; then
+    fail "omarchy-plugin-validate is required in desktop CI"
+  else
+    note_unavailable "omarchy-plugin-validate (manifest received portable validation only)"
+  fi
+else
+  printf '%s\n' 'check: native stock validation not applicable (manifest.json is absent)' >&2
+fi
+
+find . -path ./.git -prune -o -path ./reader/vendor -prune -o -type f -name '*.json' -print | while IFS= read -r json_file; do
+  python3 -B -m json.tool "$json_file" >/dev/null || fail "$json_file is not valid JSON"
+done
+
+[ -f reader/vendor/VERSIONS ] || fail "reader/vendor/VERSIONS is missing"
+(cd reader/vendor && sha256sum -c --quiet VERSIONS) || fail "reader/vendor does not match VERSIONS"
+
+if [ -e CLAUDE.md ] || [ -L CLAUDE.md ]; then
+  [ -f CLAUDE.md ] && [ ! -L CLAUDE.md ] || fail "CLAUDE.md must be a regular file"
+  [ "$(wc -c < CLAUDE.md)" -eq 11 ] || fail "CLAUDE.md must contain exactly @AGENTS.md"
+  [ "$(sed -n '1p' CLAUDE.md)" = '@AGENTS.md' ] || fail "CLAUDE.md must contain exactly @AGENTS.md"
+fi
+if find . -path ./.git -prune -o -type l -print -quit | grep -q .; then
+  fail "checkout must not contain symlinks outside .git"
+fi
+
+if [ -n "$qml_files" ]; then
+  qmllint_bin=$(command -v qmllint || true)
+  qmlformat_bin=$(command -v qmlformat || true)
+  [ -n "$qmllint_bin" ] || [ ! -x /usr/lib/qt6/bin/qmllint ] || qmllint_bin=/usr/lib/qt6/bin/qmllint
+  [ -n "$qmlformat_bin" ] || [ ! -x /usr/lib/qt6/bin/qmlformat ] || qmlformat_bin=/usr/lib/qt6/bin/qmlformat
+
+  native_missing=''
+  [ -n "$qmllint_bin" ] || native_missing="$native_missing qmllint"
+  [ -n "$qmlformat_bin" ] || native_missing="$native_missing qmlformat"
+  [ -d /usr/share/omarchy/shell/Ui ] || native_missing="$native_missing qs.Ui"
+  [ -d /usr/share/omarchy/shell/Commons ] || native_missing="$native_missing qs.Commons"
+
+  if [ -n "$native_missing" ]; then
+    if "$desktop_ci"; then
+      fail "native QML checks require:$native_missing"
+    fi
+    note_unavailable "native QML checks require:$native_missing"
+  else
+    qml_check_dir=$(mktemp -d)
+    trap 'rm -rf "$qml_check_dir"' EXIT HUP INT TERM
+    mkdir -p "$qml_check_dir/qs"
+    ln -s /usr/share/omarchy/shell/Ui "$qml_check_dir/qs/Ui"
+    ln -s /usr/share/omarchy/shell/Commons "$qml_check_dir/qs/Commons"
+
+    printf '%s\n' "$qml_files" | while IFS= read -r qml_file; do
+      "$qmllint_bin" -I "$qml_check_dir" "$qml_file"
+      "$qmlformat_bin" "$qml_file" >"$qml_check_dir/formatted.qml"
+      cmp -s "$qml_file" "$qml_check_dir/formatted.qml" || fail "$qml_file is not qmlformat-formatted"
+    done
+  fi
+else
+  printf '%s\n' 'check: native QML checks not applicable (no QML sources)' >&2
+fi
+
+printf '%s\n' 'check: portable checks passed'

@@ -1,0 +1,12 @@
+[
+  {"id":"instruction","label":"Agent instructions","colour":"orange","match":{"paths":["AGENTS.md","CLAUDE.md","CLAUDE.local.md","codex.md","GEMINI.md","/CONVENTIONS.md",".claude/",".codex/",".github/copilot-instructions.md",".github/instructions/*.instructions.md",".cursor/rules/*.mdc",".cursorrules",".windsurf/rules/*.md",".windsurfrules",".clinerules",".clinerules/"],"extensions":[".md",".mmd",".mermaid"]},"builtin":true,"overridden":false},
+  {"id":"readme","label":"Readmes","colour":"cyan","match":{"paths":["README.md"],"extensions":[".md",".mmd",".mermaid"]},"builtin":true,"overridden":false},
+  {"id":"decision","label":"Decisions","colour":"magenta","match":{"paths":["docs/adr/","decisions.md"],"extensions":[".md",".mmd",".mermaid"]},"builtin":true,"overridden":false},
+  {"id":"runbook","label":"Runbooks","colour":"yellow","match":{"paths":["runbooks/"],"extensions":[".md",".mmd",".mermaid"]},"builtin":true,"overridden":false},
+  {"id":"plan","label":"Plans","colour":"bright_blue","match":{"paths":["plans/"],"extensions":[".md",".mmd",".mermaid"]},"builtin":true,"overridden":false},
+  {"id":"log","label":"Logs","colour":"muted","match":{"paths":["logs/"],"extensions":[".md",".mmd",".mermaid"]},"builtin":true,"overridden":false},
+  {"id":"archive","label":"Archived","colour":"brown","match":{"paths":["archive/","superseded/"],"extensions":[".md",".mmd",".mermaid"]},"builtin":true,"overridden":false},
+  {"id":"generated","label":"Generated","colour":"foreground","match":{"paths":["docs/generated/"],"extensions":[".md",".mmd",".mermaid"]},"builtin":true,"overridden":false},
+  {"id":"diagram","label":"Diagrams","colour":"bright_magenta","match":{"paths":[],"extensions":[".mmd",".mermaid"]},"builtin":true,"overridden":false},
+  {"id":"doc","label":"Documents","colour":"blue","match":{"paths":[],"extensions":[".md"]},"builtin":true,"overridden":false}
+]

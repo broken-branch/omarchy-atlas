@@ -1,0 +1,21 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted", "Linux", "omarchy-atlas"]') || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Python, package, QML and reader checks
+        env:
+          ATLAS_DESKTOP_CI: ${{ github.event.repository.private }}
+        run: sh scripts/check

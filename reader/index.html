@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Atlas Reader</title>
+  <link id="theme" rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="/app.css">
+  <script defer src="/vendor/markdown-it.min.js"></script>
+  <script defer src="/vendor/highlight.min.js"></script>
+  <script defer src="/vendor/mermaid.min.js"></script>
+  <script defer src="/vendor/force-graph.min.js"></script>
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <header class="toolbar">
+    <button id="back-button" disabled>← Back</button><button id="forward-button" disabled>Forward →</button>
+    <nav id="breadcrumb" aria-label="Location"><button id="atlas-button" class="crumb">Atlas</button><span id="crumb-tail"></span></nav>
+    <div class="view-actions"><button id="files-button">Files o</button><button id="neighbourhood-button" aria-pressed="false">Neighbourhood n</button><button id="map-button">Whole map m</button></div>
+  </header>
+  <div id="status" role="status"></div><button id="retry" hidden>Retry</button>
+  <div id="theme-status" role="status"></div>
+  <div id="workspace">
+    <section id="read-view">
+      <nav class="rail" aria-label="Document"><form id="search-form"><label for="search">Find in document</label><input id="search" type="search"><button>Find</button></form><div id="toc" tabindex="-1" aria-label="Outline"></div></nav>
+      <main id="reading" tabindex="-1">
+        <div class="file-step"><button id="previous-file" disabled>Previous file</button><button id="next-file" disabled>Next file</button></div>
+        <h1 id="document-title"></h1>
+        <div id="metadata"></div>
+        <div class="actions" id="reader-actions"><button data-action="map">Map m</button><button data-action="edit">Edit e</button><button data-action="details">Details d</button></div>
+        <article id="document"></article><footer id="backlinks" tabindex="-1"></footer>
+      </main>
+    </section>
+    <section id="map-view" aria-label="Whole map" hidden></section>
+    <aside id="neighbourhood" aria-label="Neighbourhood" hidden>
+      <div class="pane-heading"><div><strong>Neighbourhood</strong><small>Direct references · all kinds</small></div><button data-action="close-neighbourhood">Close</button></div>
+      <div id="neighbour-list" role="listbox" aria-label="Direct references"></div>
+    </aside>
+  </div>
+  <aside id="picker" class="overlay" aria-label="Files" tabindex="-1" hidden>
+    <div class="pane-heading"><h2 id="picker-title">Files</h2><button data-action="close-picker">Close</button></div>
+    <label for="file-search">Find a file</label><input id="file-search" type="search" placeholder="Path or title"><div id="file-list" role="listbox"></div>
+  </aside>
+  <aside id="facts" class="overlay" aria-label="Details" tabindex="-1" hidden></aside>
+</body>
+</html>

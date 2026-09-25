@@ -1,0 +1,2 @@
+# Project Claude
+@../AGENTS.md

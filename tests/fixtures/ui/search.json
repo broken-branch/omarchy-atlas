@@ -1,0 +1,9 @@
+{
+  "matches": [
+    {
+      "file": { "root": "alpha", "path": "docs/guide.md", "kind": "doc", "title": "Guide", "bytes": 800, "lines": 40, "time": "2026-09-17T10:00:00Z", "timeSource": "git", "inbound": 2, "outbound": 1, "orphan": false, "dangling": 1, "stale": null },
+      "line": 8,
+      "text": "A needle appears only in content."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+# Vendored browser distributions. Refresh only with scripts/vendor-update.
+# markdown-it 15.0.2 https://cdn.jsdelivr.net/npm/markdown-it@15.0.2/dist/browser/markdown-it.umd.min.js (MIT)
+# highlight.js 11.12.0 https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.12.0/highlight.min.js (BSD-3-Clause)
+# mermaid 12.0.0 https://cdn.jsdelivr.net/npm/mermaid@12.0.0/dist/mermaid.min.js (MIT)
+# force-graph 1.51.4 https://cdn.jsdelivr.net/npm/force-graph@1.51.4/dist/force-graph.min.js (MIT)
+635972b985228e8af9f0143647c68616b7a3bb09f6946e7e4a52e43dcf5e7be5  markdown-it.min.js
+8ab71eb09c51f501e5e25157d9cff100e46cc29bcbfc744d0b746d451fca7f53  highlight.min.js
+28fca7ae6ebc7ed7bb63bde63136a74bfef14f296a57e403657eeb8b32836073  mermaid.min.js
+1008539bb9e171a0dc343453366451a1b3a6ded06028ef4f978608b658ba2d0a  force-graph.min.js
+792c48c5a849a15fdf9e37e8bcf9e6d1dd13b32b46c642a748a0a46a9919d473  LICENSE.markdown-it
+6c081431591d9df696c82dc598fe1423765b8a299b200ed00b281afd0f64c490  LICENSE.highlight.js
+ec9fb67dcb25eccc416ed56e1aab819222c805a2a4bfe4cb19e7556bf2ffde80  LICENSE.mermaid.txt
+5b6dc9ce44c7b73620b191c567339212bd00537af46fdedaf98304c34214cc9c  LICENSE.force-graph

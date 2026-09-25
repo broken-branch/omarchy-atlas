@@ -1,0 +1,5 @@
+[
+  {"address":"0xreader","title":"Atlas Reader","class":"chrome-atlas"},
+  {"address":"0xpanel","title":"Atlas","class":"quickshell"},
+  {"address":"0xother","title":"Terminal","class":"Alacritty"}
+]

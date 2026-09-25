@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-19T10:00:00Z",
+  "roots": [
+    { "name": "alpha", "path": "/fixtures/alpha", "git": true, "impact": "present" },
+    { "name": "beta", "path": "/fixtures/beta", "git": false, "impact": "absent" }
+  ],
+  "files": [
+    { "root": "alpha", "path": "AGENTS.md", "kind": "instruction", "title": "Agent guide", "bytes": 400, "lines": 20, "time": "2026-09-18T10:00:00Z", "timeSource": "git", "inbound": 0, "outbound": 1, "orphan": false, "dangling": 0, "stale": null },
+    { "root": "alpha", "path": "docs/guide.md", "kind": "doc", "title": "Guide", "bytes": 800, "lines": 40, "time": "2026-09-17T10:00:00Z", "timeSource": "git", "inbound": 2, "outbound": 1, "orphan": false, "dangling": 1, "stale": { "root": "alpha", "path": "docs/guide.md", "time": "2026-09-17T10:00:00Z", "newestSource": { "path": "src/app.py", "time": "2026-09-19T09:00:00Z" }, "rule": "impact.yml#1" } },
+    { "root": "alpha", "path": "docs/lost.md", "kind": "doc", "title": "Lost", "bytes": 120, "lines": 6, "time": "2026-09-16T10:00:00Z", "timeSource": "git", "inbound": 0, "outbound": 0, "orphan": true, "dangling": 0, "stale": null },
+    { "root": "beta", "path": "README.md", "kind": "readme", "title": "Beta", "bytes": 200, "lines": 10, "time": "2026-09-19T08:00:00Z", "timeSource": "mtime", "inbound": 0, "outbound": 1, "orphan": false, "dangling": 1, "stale": null },
+    { "root": "beta", "path": "runbooks/recover.md", "kind": "runbook", "title": "Recovery", "bytes": 300, "lines": 15, "time": "2026-09-19T07:00:00Z", "timeSource": "mtime", "inbound": 1, "outbound": 0, "orphan": false, "dangling": 0, "stale": null }
+  ],
+  "references": [
+    { "from": { "root": "alpha", "path": "AGENTS.md" }, "to": { "root": "alpha", "path": "docs/guide.md" }, "style": "markdown", "line": 4, "text": "[Guide](docs/guide.md)", "resolved": true, "pointer": true },
+    { "from": { "root": "alpha", "path": "docs/impact.yml" }, "to": { "root": "alpha", "path": "docs/guide.md" }, "style": "impact", "line": 1, "text": "docs/guide.md", "resolved": true, "pointer": false },
+    { "from": { "root": "alpha", "path": "docs/guide.md" }, "to": null, "style": "wikilink", "line": 12, "text": "[[Missing]]", "resolved": false, "pointer": false },
+    { "from": { "root": "beta", "path": "README.md" }, "to": { "root": "beta", "path": "runbooks/recover.md" }, "style": "path", "line": 3, "text": "runbooks/recover.md", "resolved": true, "pointer": false },
+    { "from": { "root": "beta", "path": "README.md" }, "to": null, "style": "markdown", "line": 5, "text": "[gone](gone.md)", "resolved": false, "pointer": false }
+  ],
+  "unavailable": [
+    { "root": "beta", "reason": "impact map absent" }
+  ],
+  "summary": { "files": 5, "references": 5, "orphans": 1, "dangling": 2, "stale": 1 }
+}

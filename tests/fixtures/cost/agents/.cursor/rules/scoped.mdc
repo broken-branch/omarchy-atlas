@@ -1,0 +1,5 @@
+---
+globs: src/**
+alwaysApply: false
+---
+Only for src.

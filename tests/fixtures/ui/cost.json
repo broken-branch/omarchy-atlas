@@ -1,0 +1,7 @@
+{
+  "roots": [
+    { "root": "alpha", "agent": "claude", "startup": [{ "path": "CLAUDE.md", "bytes": 12, "lines": 1, "tokensApprox": 3 }, { "path": "AGENTS.md", "bytes": 400, "lines": 20, "tokensApprox": 100 }], "referenced": [{ "path": "docs/guide.md", "bytes": 800, "lines": 40, "tokensApprox": 200 }], "startupBytes": 412, "startupTokensApprox": 103, "referencedBytes": 800, "referencedTokensApprox": 200 },
+    { "root": "alpha", "agent": "codex", "startup": [{ "path": "AGENTS.md", "bytes": 400, "lines": 20, "tokensApprox": 100 }, { "path": "/tmp/user/.codex/AGENTS.md", "bytes": 80, "lines": 4, "tokensApprox": 20 }], "referenced": [{ "path": "docs/guide.md", "bytes": 800, "lines": 40, "tokensApprox": 200 }], "startupBytes": 480, "startupTokensApprox": 120, "referencedBytes": 800, "referencedTokensApprox": 200 },
+    { "root": "beta", "agent": "codex", "startup": [{ "path": "AGENTS.md", "bytes": 200, "lines": 10, "tokensApprox": 50 }], "referenced": [], "startupBytes": 200, "startupTokensApprox": 50, "referencedBytes": 0, "referencedTokensApprox": 0 }
+  ]
+}

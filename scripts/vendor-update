@@ -1,0 +1,50 @@
+#!/bin/sh
+set -eu
+
+project_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+vendor_dir="$project_root/reader/vendor"
+stage_dir=$(mktemp -d "${TMPDIR:-/tmp}/atlas-vendor.XXXXXX")
+trap 'rm -rf "$stage_dir"' EXIT HUP INT TERM
+
+fetch() {
+  url=$1
+  output=$2
+  curl --fail --location --silent --show-error "$url" --output "$stage_dir/$output"
+}
+
+markdown_url='https://cdn.jsdelivr.net/npm/markdown-it@15.0.2/dist/browser/markdown-it.umd.min.js'
+highlight_url='https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.12.0/highlight.min.js'
+mermaid_url='https://cdn.jsdelivr.net/npm/mermaid@12.0.0/dist/mermaid.min.js'
+force_graph_url='https://cdn.jsdelivr.net/npm/force-graph@1.51.4/dist/force-graph.min.js'
+
+fetch "$markdown_url" markdown-it.min.js
+fetch "$highlight_url" highlight.min.js
+fetch "$mermaid_url" mermaid.min.js
+fetch "$force_graph_url" force-graph.min.js
+fetch 'https://cdn.jsdelivr.net/npm/markdown-it@15.0.2/LICENSE' LICENSE.markdown-it
+fetch 'https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.12.0/LICENSE' LICENSE.highlight.js
+fetch 'https://cdn.jsdelivr.net/npm/mermaid@12.0.0/LICENSE' LICENSE.mermaid.txt
+fetch 'https://cdn.jsdelivr.net/npm/force-graph@1.51.4/LICENSE' LICENSE.force-graph
+
+(
+  cd "$stage_dir"
+  {
+    printf '%s\n' '# Vendored browser distributions. Refresh only with scripts/vendor-update.'
+    printf '# markdown-it 15.0.2 %s (MIT)\n' "$markdown_url"
+    printf '# highlight.js 11.12.0 %s (BSD-3-Clause)\n' "$highlight_url"
+    printf '# mermaid 12.0.0 %s (MIT)\n' "$mermaid_url"
+    printf '# force-graph 1.51.4 %s (MIT)\n' "$force_graph_url"
+    sha256sum \
+      markdown-it.min.js highlight.min.js mermaid.min.js force-graph.min.js \
+      LICENSE.markdown-it LICENSE.highlight.js LICENSE.mermaid.txt LICENSE.force-graph
+  } >VERSIONS
+)
+
+mkdir -p "$vendor_dir"
+for asset in \
+  markdown-it.min.js highlight.min.js mermaid.min.js force-graph.min.js \
+  LICENSE.markdown-it LICENSE.highlight.js LICENSE.mermaid.txt LICENSE.force-graph VERSIONS; do
+  mv "$stage_dir/$asset" "$vendor_dir/$asset"
+done
+
+printf '%s\n' "vendor-update: refreshed pinned browser assets in $vendor_dir"
