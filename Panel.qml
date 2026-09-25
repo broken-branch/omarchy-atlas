@@ -105,27 +105,36 @@ Panel {
     property bool closeAfterAction: false
     property bool noRoots: false
     property string refreshError: ""
+    property string searchError: ""
+    property string costError: ""
+    property int selectedSearchRow: -1
     property string indexedAt: ""
+    property double recencyNow: Date.now()
     property var requestQueue: []
     property var activeRequest: null
     property var latestRequest: ({})
     property int nextRequestId: 1
     readonly property string backendPath: PanelBridge.localPath(Qt.resolvedUrl("atlas.py"))
     readonly property var counts: IndexModel.findingCounts(index.files)
+    readonly property var recencyCounts: IndexModel.recencyCounts(index.files, recencyNow)
+    readonly property color recencyRed: IndexModel.recencyColour(themeKindColours, Color.urgent, false)
+    readonly property color recencyOrange: IndexModel.recencyColour(themeKindColours, Color.urgent, true)
     readonly property var unavailableLabels: IndexModel.unavailableLabels(index.unavailable)
     readonly property var selectedFacts: IndexModel.facts(index, selectedRoot, selectedPath, costRows)
     readonly property var visibleFiles: IndexModel.filterFiles(index, {
         roots: selectedRoots,
         kinds: selectedKinds,
         query: query,
-        findings: findings
+        findings: findings,
+        now: recencyNow
     }, searchMatches)
-    readonly property var visibleSearchMatches: IndexModel.filterMatches(searchMatches, visibleFiles)
-    readonly property string barStatus: refreshError !== "" ? "Atlas: " + refreshError : unavailableLabels.length ? "Atlas: " + unavailableLabels.join(" · ") : "Atlas: " + index.files.length + " files in " + index.roots.length + " roots · indexed " + (indexedAt || "not yet")
+    readonly property var visibleSearchMatches: IndexModel.filterMatches(searchMatches, visibleFiles, findings.recent === true)
+    readonly property string barStatus: (refreshError !== "" ? "Atlas: " + refreshError : unavailableLabels.length ? "Atlas: " + unavailableLabels.join(" · ") : "Atlas: " + index.files.length + " files in " + index.roots.length + " roots · indexed " + (indexedAt || "not yet")) + (IndexModel.barRecency(recencyCounts) ? " · " + IndexModel.barRecency(recencyCounts) : "")
     visible: true
     implicitWidth: button.implicitWidth
     implicitHeight: button.implicitHeight
     function openPopup() {
+        recencyNow = Date.now();
         if (!root.opened)
             root.open();
         page = "summary";
@@ -328,8 +337,11 @@ Panel {
             enqueue("cost", [], "cost");
         } else if (request.command === "search") {
             searchMatches = PanelBridge.searchData(data);
+            searchError = "";
+            selectedSearchRow = -1;
         } else if (request.command === "cost") {
             costRows = data.roots || [];
+            costError = "";
         }
     }
     function handleFailure(request, message) {
@@ -350,12 +362,22 @@ Panel {
             rootsError = message;
             return;
         }
-        if (request.command === "search")
+        if (request.command === "search") {
             searchMatches = [];
+            searchError = message;
+            selectedSearchRow = -1;
+            return;
+        }
+        if (request.command === "cost") {
+            costError = message;
+            return;
+        }
         refreshError = message;
     }
     function requestSearch(value) {
         query = value;
+        selectedSearchRow = -1;
+        searchError = "";
         searchTimer.restart();
     }
     function toggled(values, value) {
@@ -380,6 +402,14 @@ Panel {
         }
         enqueue("search", [value], "search");
     }
+    function retryFailure(command) {
+        if (command === "search")
+            runSearch();
+        else if (command === "cost")
+            enqueue("cost", [], "cost");
+        else
+            refreshIndex();
+    }
     function selectFile(rootName, path) {
         selectedRoot = rootName;
         selectedPath = path;
@@ -400,11 +430,24 @@ Panel {
             return;
         }
         if (page === "summary") {
-            selectedFinding = Math.max(0, Math.min(2, selectedFinding + offset));
+            selectedFinding = Math.max(0, Math.min(3, selectedFinding + offset));
             return;
         }
         var files = visibleFiles;
-        if (page !== "files" || !files.length || offset === 0)
+        if (page !== "files" || offset === 0)
+            return;
+        if (query) {
+            var nextRow = IndexModel.nextRowIndex(visibleSearchMatches, selectedSearchRow, offset);
+            if (nextRow < 0)
+                return;
+            selectedSearchRow = nextRow;
+            selectFile(visibleSearchMatches[nextRow].file.root, visibleSearchMatches[nextRow].file.path);
+            Qt.callLater(function () {
+                root.scrollSelectedIntoView();
+            });
+            return;
+        }
+        if (!files.length)
             return;
         var current = -1;
         for (var i = 0; i < files.length; ++i) {
@@ -421,6 +464,10 @@ Panel {
     }
     function scrollSelectedIntoView() {
         var rows = query ? popup.searchRows : popup.fileRows;
+        if (query && selectedSearchRow >= 0 && selectedSearchRow < rows.count) {
+            revealControl(rows.itemAt(selectedSearchRow));
+            return;
+        }
         for (var i = 0; i < rows.count; ++i) {
             var item = rows.itemAt(i);
             var file = item && query ? item.modelData.file : item ? item.modelData : null;
@@ -453,7 +500,7 @@ Panel {
             enqueue("edit", ["--root", selectedRoot, "--path", selectedPath], "edit");
     }
     function openFinding(position) {
-        var names = ["orphans", "dangling", "stale"];
+        var names = ["orphans", "dangling", "stale", "recent"];
         var next = {};
         next[names[position]] = true;
         findings = next;
@@ -480,9 +527,12 @@ Panel {
     }
     function closeFromEscape() {
         if (popup.searchField.activeFocus && popup.searchField.text !== "") {
+            var cleared = IndexModel.clearedSearch();
             popup.searchField.text = "";
-            query = "";
-            searchMatches = [];
+            query = cleared.query;
+            searchMatches = cleared.matches;
+            searchError = cleared.error;
+            selectedSearchRow = -1;
             return;
         }
         closePopup();
@@ -553,6 +603,12 @@ Panel {
         repeat: false
         onTriggered: root.runSearch()
     }
+    Timer {
+        interval: 30000
+        repeat: true
+        running: true
+        onTriggered: root.recencyNow = Date.now()
+    }
     BarIconButton {
         id: button
         anchors.fill: parent
@@ -566,6 +622,15 @@ Panel {
             else if (buttonCode === Qt.RightButton)
                 root.showSelected(false, false);
         }
+    }
+    Rectangle {
+        width: Style.space(7)
+        height: width
+        radius: width / 2
+        anchors.right: button.right
+        anchors.top: button.top
+        color: root.recencyRed
+        visible: root.recencyCounts.red > 0
     }
     PanelPopup {
         id: popup

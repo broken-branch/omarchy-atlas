@@ -28,15 +28,6 @@ test('previous and next file only use the captured picker list', async () => {
   assert.equal(adjacentFile([], files[0], 1), null);
 });
 
-test('Enter on a focused neighbour row opens its target for reading', async () => {
-  const {neighbourReadTarget} = await app;
-  const target = {root:'alpha', path:'docs/guide.md'};
-  const entries = [{target}, {target:null}];
-  assert.deepEqual(neighbourReadTarget(entries, '0', 'Enter'), target);
-  assert.equal(neighbourReadTarget(entries, '0', ' '), null);
-  assert.equal(neighbourReadTarget(entries, '1', 'Enter'), null);
-});
-
 test('history high-water survives reload and resets when forward history is replaced', async () => {
   const {historyHighWater} = await app;
   const values = new Map();
@@ -55,6 +46,7 @@ test('reader and map key assignments preserve native inputs and retire brackets'
   assert.equal(key('d'), 'details'); assert.equal(key('e'), 'edit'); assert.equal(key('t'), 'outline'); assert.equal(key('b'), 'backlinks'); assert.equal(key('r'), 'refresh'); assert.equal(key('/'), 'search');
   assert.equal(key('Backspace'), 'back'); assert.equal(key('h'), 'back'); assert.equal(key('ArrowLeft'), 'back'); assert.equal(key('l', 'map'), 'activate'); assert.equal(key('ArrowRight', 'map'), 'activate');
   assert.equal(key('j', 'map'), 'next'); assert.equal(key('k', 'map'), 'previous');
+  assert.equal(key('z'), 'toolbar'); assert.equal(key('z', 'map'), 'toolbar');
   assert.equal(key('['), null); assert.equal(key(']'), null);
   const target = tag => ({closest: selector => selector.split(', ').some(part => part === tag) ? {} : null});
   const button = target('button'), input = target('input');
@@ -67,66 +59,69 @@ test('reader and map key assignments preserve native inputs and retire brackets'
   assert.equal(key('m', 'read', {altKey:true}), null); assert.equal(key('Escape', 'read', {editable:true}), 'escape');
 });
 
-test('key facts read KeyboardEvent properties from its prototype', async () => {
-  const {keyFacts, shortcutFor} = await app;
-  const event = Object.create({key:'d', ctrlKey:false, metaKey:false, altKey:false, isComposing:false});
-  assert.equal(shortcutFor(keyFacts(event, false), 'read'), 'details');
-});
-
-test('reader shell keeps title and fixed header/action placement', () => {
+test('reader shell names views and marks key hints as decorative', () => {
   const html = fs.readFileSync(path.join(root, 'reader/index.html'), 'utf8');
   assert.match(html, /<title>Atlas Reader<\/title>/);
-  assert.match(html, /← Back<\/button><button id="forward-button"[^>]*>Forward →/);
-  assert.match(html, /Files o<\/button><button id="neighbourhood-button"[^>]*>Neighbourhood n<\/button><button id="map-button">Whole map m/);
-  assert.match(html, /Previous file<\/button><button id="next-file"[^>]*>Next file/);
-  assert.match(html, /data-action="map">Map m<\/button><button data-action="edit">Edit e<\/button><button data-action="details">Details d/);
-  assert.doesNotMatch(html, /id="read-button"|id="facts-button"/);
+  assert.match(html, /id="toc" role="navigation"/);
+  assert.match(html, /id="map-button" aria-keyshortcuts="m">Whole map <span aria-hidden="true">m/);
 });
 
-test('map Details toggles the facts drawer for the same file', async () => {
-  const {detailsShouldClose} = await app;
-  const target = {root:'alpha', path:'docs/guide.md'};
-  assert.equal(detailsShouldClose('facts', target, target), true, 'same open target closes Details');
-  assert.equal(detailsShouldClose('facts', target, {root:'alpha', path:'README.md'}), false, 'another target opens or replaces Details');
-  assert.equal(detailsShouldClose(null, target, target), false, 'closed drawer opens Details');
-  const sourceText = fs.readFileSync(path.join(root, 'reader/app.js'), 'utf8');
-  assert.match(sourceText, /else if \(action === 'details'\) toggleFacts\(target, opener\)/, 'Details button uses the shared toggle');
-  assert.match(sourceText, /details:\(\) => toggleFacts\(selected \|\| route\.target, document\.activeElement\)/, 'reader d key uses the shared toggle');
-  assert.equal((sourceText.match(/onDetails:target => toggleFacts/g) || []).length, 1, 'the shared map instance wires Details');
-  assert.doesNotMatch(sourceText, /onMap:/, 'restoring onMap recreates the neighbourhood footer route');
+test('toolbar button, handle, z key, and persistence work on reader and map', async () => {
+  const values = new Map();
+  const storage = {getItem:key => values.get(key) ?? null, setItem:(key, value) => values.set(key, value)};
+  const h = await navigationHarness({localStorage:storage});
+  await h.click('hide-toolbar');
+  assert.equal(h.node('toolbar').hidden, true);
+  assert.equal(h.node('show-toolbar').hidden, false);
+  assert.equal(h.bodyClasses.has('toolbar-hidden'), true);
+  assert.equal(h.focused(), 'show-toolbar');
+  assert.equal(h.node('show-toolbar').attributes['aria-expanded'], 'false');
+  assert.equal(values.get('atlas-toolbar-hidden'), 'true');
+  await h.click('show-toolbar');
+  assert.equal(h.node('toolbar').hidden, false);
+  assert.equal(h.bodyClasses.has('toolbar-hidden'), false);
+  assert.equal(h.focused(), 'hide-toolbar');
+  assert.equal(h.node('hide-toolbar').attributes['aria-expanded'], 'true');
+  await h.key('m'); await h.key('z');
+  assert.equal(h.node('toolbar').hidden, true);
+  assert.equal(h.bodyClasses.has('toolbar-hidden'), true);
+  assert.equal(h.focused(), 'hide-toolbar', 'z does not expand the focused handle');
+  assert.equal(h.node('map-view').hidden, false);
+  const reloaded = await navigationHarness({localStorage:storage});
+  assert.equal(reloaded.node('toolbar').hidden, true);
+  assert.equal(reloaded.node('show-toolbar').hidden, false);
 });
 
-test('changing the header Whole map target back to the active file ignores a selected neighbour', async () => {
-  const {wholeMapTarget} = await app;
-  const active = {root:'alpha', path:'docs/guide.md'}, neighbour = {root:'alpha', path:'README.md'};
-  assert.deepEqual(wholeMapTarget(active, neighbour, true), neighbour);
-  assert.deepEqual(wholeMapTarget(active, neighbour, false), active);
-  assert.deepEqual(wholeMapTarget(active, null, true), active);
-  assert.match(source, /\$\('map-button'\)\.onclick = openWholeMap/, 'header Whole map uses the selected-neighbour route');
-  assert.match(source, /map:openWholeMap/, 'm uses the same selected-neighbour route as the header');
+test('toolbar works when localStorage access throws', async () => {
+  const storage = {getItem() { throw Error('blocked'); }, setItem() { throw Error('blocked'); }};
+  const h = await navigationHarness({localStorage:storage});
+  await h.key('z'); assert.equal(h.node('toolbar').hidden, true);
+  await h.click('show-toolbar'); assert.equal(h.node('toolbar').hidden, false);
 });
 
-test('map camera changes replace the current map history entry before browser history navigation', () => {
-  assert.match(source, /onViewChange:\(\) => \{ if \(route\.view === 'map'\) saveVisit\(\); \}/,
-    'removing the map view callback leaves Forward without the saved camera');
-});
 
 // Run the real app controller with DOM/transport boundaries supplied by the test.
 async function navigationHarness(options = {}) {
   const vm = require('node:vm');
-  const nodes = new Map(), listeners = {}, windowListeners = {}, instances = [], serverEvents = {};
+  const nodes = new Map(), listeners = {}, windowListeners = {}, instances = [], serverEvents = {}, loadedLibraries = [], requests = [];
+  let focused = 'reading';
   const target = options.target || {root:'demo', path:'start.md'};
   function node(id) {
     // textContent and innerHTML are two views of one content, as in the DOM.
     if (!nodes.has(id)) nodes.set(id, {id, hidden:false, value:'', dataset:{}, scrollLeft:0, scrollTop:0, content:'',
       get textContent() { return this.content.replace(/<[^>]*>/g, ''); }, set textContent(value) { this.content = String(value); },
       get innerHTML() { return this.content; }, set innerHTML(value) { this.content = String(value); },
-      classList:{values:new Set(), toggle(name, value) { value ? this.values.add(name) : this.values.delete(name); }},
-      attributes:{}, setAttribute(key, value) { this.attributes[key] = value; },
-      querySelectorAll:() => [], querySelector:() => null, closest:() => null, contains:() => false,
-      focus() {}, scrollTo(x, y) { this.scrollLeft = x; this.scrollTop = y; }, insertAdjacentHTML() {}});
+      classList:{values:new Set(), toggle(name, value) { value ? this.values.add(name) : this.values.delete(name); }, contains(name) { return this.values.has(name); }},
+      attributes:{}, setAttribute(key, value) { this.attributes[key] = value; }, removeAttribute(key) { delete this.attributes[key]; },
+      querySelectorAll(selector) { if (id === 'document' && selector === '[data-diagram]' && this.content.includes('data-diagram')) {
+        const diagram = node('diagram'); diagram.dataset.diagram = '0'; diagram.isConnected = true; return [diagram];
+      } if (id === 'file-list' && selector === '[data-file]') return (this._files || []).map((_, i) => {
+        const row = node(`file-${i}`); row.dataset.file = String(i); row.closest = query => query === '[data-file]' ? row : null; return row;
+      }); return []; }, querySelector:() => null, closest(selector) { return ((id === 'file-search' || id === 'search') && selector.includes('input')) || (/^file-\d+$/.test(id) && selector === '[data-file]') ? this : null; }, contains:() => false,
+      focus() { focused = id; }, scrollTo(x, y) { this.scrollLeft = x; this.scrollTop = y; }, insertAdjacentHTML() {}});
     return nodes.get(id);
   }
+  node('reader-actions').innerHTML = fs.readFileSync(path.join(root, 'reader/index.html'), 'utf8').match(/<div class="actions" id="reader-actions">([^]*?)<\/div>/)[1];
   const location = {href:options.href || 'http://localhost/read/demo/start.md', origin:'http://localhost'};
   const entries = [{state:null, url:location.href}]; let at = 0;
   const history = {get state() { return entries[at].state; },
@@ -137,28 +132,36 @@ async function navigationHarness(options = {}) {
   const vendor = {atob};
   vm.runInNewContext(fs.readFileSync(path.join(root, 'reader/vendor/markdown-it.min.js'), 'utf8'), vendor);
   const documentNode = new EventTarget();
-  Object.assign(documentNode, {getElementById:node, querySelector:() => ({}), activeElement:node('reading'), documentElement:{}, closest:() => null});
+  const bodyClasses = new Set();
+  Object.assign(documentNode, {getElementById:node, querySelector:() => ({}), querySelectorAll:() => [], activeElement:node('reading'), documentElement:{},
+    createElement:tag => ({tag, dataset:{}, remove() {}}), head:{append(item) { if (item.tag === 'script') { loadedLibraries.push(item.src); item.onload(); } }},
+    body:{classList:{toggle(name, enabled) { enabled ? bodyClasses.add(name) : bodyClasses.delete(name); }}}, closest:() => null});
   const addListener = documentNode.addEventListener.bind(documentNode);
   documentNode.addEventListener = (name, fn, ...rest) => { if (name === 'keydown' && !listeners.keydown) listeners.keydown = fn; addListener(name, fn, ...rest); };
   const context = {URL, URLSearchParams, console, history, location,
     sessionStorage:{getItem:() => null, setItem() {}},
+    localStorage:options.localStorage || {getItem:() => null, setItem() {}},
+    setInterval:() => 1, clearInterval() {},
     getComputedStyle:() => ({getPropertyValue:() => ''}),
     document:documentNode,
-    window:{markdownit:vendor.markdownit, mermaid:{initialize() {}}, addEventListener(name, fn) { windowListeners[name] = fn; }},
+    window:{markdownit:vendor.markdownit, mermaid:{initialize() {}, async render() { return {svg:'<svg></svg>'}; }}, addEventListener(name, fn) { windowListeners[name] = fn; }},
     EventSource:class {addEventListener(name, fn) { serverEvents[name] = fn; } close() {}},
     fetch:async url => {
+      requests.push(url);
       if (url !== '/api/index') {
         options.onFileRequest?.(node, url);
         if (options.fileStatus) return {ok:false, status:options.fileStatus, json:async () => ({error:'file request failed'})};
       }
-      return {ok:true, json:async () => url === '/api/index' ? {files:[target], roots:['demo']} : options.fileData || {file:{...target,title:'Start'}, content:'# Start\n\nBody text', references:{inbound:[],outbound:[]}}};
+      if (url === '/api/index' && options.indexFailure?.message) return {ok:false, status:503, json:async () => ({error:options.indexFailure.message})};
+      return {ok:true, json:async () => url === '/api/index' ? {files:options.indexFiles || [target], roots:['demo'], generatedAt:'2026-09-25T12:00:00Z'} : options.fileData || {file:{...target,title:'Start'}, content:'# Start\n\nBody text', references:{inbound:[],outbound:[]}}};
     },
     mapModuleStub:{createMap(container, mapOptions) {
       documentNode.addEventListener('keydown', event => { options.onMapKey?.(event); });
-      const instance = {container, scope:null, selected:null, visible:false,
-        setIndex() {}, setScope(value) { this.scope = value; }, setTarget(value) { this.selected = value; },
-        setVisible(value) { this.visible = value; }, getView() { return {selected:this.selected, zoom:2, center:{x:3,y:4}}; },
-        setView(value) { this.selected = value.selected; }, setTheme() {}, focusSearch() { this.controlsHidden = false; this.searchFocused = true; }, destroy() {}};
+      const instance = {container, options:mapOptions, scope:null, selected:null, zoom:2, center:{x:3,y:4}, visible:false, indexed:false, indexCalls:0, scopeCalls:0,
+        setIndex() { this.indexed = true; this.indexCalls++; }, setScope(value) { this.scope = value; this.scopeCalls++; }, setTarget(value) { if (this.indexed) { this.selected = value; this.center = {x:9,y:10}; } },
+        clearSelection() { this.selected = null; mapOptions.onViewChange(); },
+        setVisible(value) { this.visible = value; }, getView() { return {selected:this.selected, zoom:this.zoom, center:this.center}; },
+        setView(value) { this.selected = value.selected; this.zoom = value.zoom; this.center = value.center; }, setTheme() {}, focusSearch() { this.controlsHidden = false; this.searchFocused = true; }, destroy() {}};
       instances.push(instance); return instance;
     }}
   };
@@ -166,9 +169,16 @@ async function navigationHarness(options = {}) {
   vm.runInContext(source.replace(/export /g, '').replace("import('./map.js')", 'Promise.resolve(mapModuleStub)'), context);
   await context.startApp();
   const settle = () => new Promise(resolve => setImmediate(resolve));
-  return {node, history, instances, target, entries, async key(key) { listeners.keydown({key, target:node('reading'), preventDefault() {}, stopImmediatePropagation() {}}); await settle(); },
+  return {node, history, instances, target, entries, bodyClasses, loadedLibraries, requests, focused:() => focused, async key(key) { listeners.keydown({key, target:node('reading'), preventDefault() {}, stopImmediatePropagation() {}}); await settle(); },
+    async keyOn(id, key) { listeners.keydown({key, target:node(id), preventDefault() {}, stopImmediatePropagation() {}}); await settle(); },
     async dispatchKey(key) { class KeyboardEvent extends Event { constructor(type, init) { super(type, {cancelable:true}); this.key = init.key; this.ctrlKey = this.metaKey = this.altKey = this.isComposing = false; } } documentNode.dispatchEvent(new KeyboardEvent('keydown', {key})); await settle(); },
     async click(id) { await node(id).onclick({currentTarget:node(id)}); await settle(); },
+    async clickHint(container, action) {
+      assert.match(node(container).innerHTML, new RegExp(`data-action="${action}"[^>]*>[^<]*<span aria-hidden="true">`));
+      const button = {dataset:{action}, focus() { focused = action; }};
+      const hint = {dataset:{}, closest:selector => selector === '[data-action]' ? button : null};
+      await node(container).onclick({target:hint}); await settle();
+    },
     async serverEvent(name, data = {}) { serverEvents[name]({data:JSON.stringify(data)}); await settle(); }};
 }
 
@@ -181,6 +191,84 @@ test('a document KeyboardEvent reveals hidden map controls through the app handl
   assert.equal(h.instances[0].controlsHidden, false);
   assert.equal(h.instances[0].searchFocused, true);
   assert.equal(mapListenerCalls, 0, 'the app owns slash before the map listener');
+});
+
+test('ordinary reading defers map libraries and a cold map target survives the first index', async () => {
+  const read = await navigationHarness();
+  assert.deepEqual(read.loadedLibraries, []);
+  assert.equal(read.instances.length, 0);
+  const cold = await navigationHarness({href:'http://localhost/map/demo/start.md'});
+  assert.deepEqual(JSON.parse(JSON.stringify(cold.instances[0].selected)), cold.target);
+  assert.deepEqual(JSON.parse(JSON.stringify(cold.instances[0].center)), {x:9,y:10});
+  assert.deepEqual(cold.loadedLibraries, ['/vendor/force-graph.min.js']);
+});
+
+test('an intentionally cleared map selection and camera survive an index refresh', async () => {
+  const h = await navigationHarness({href:'http://localhost/map/demo/start.md'});
+  const map = h.instances[0];
+  map.center = {x:77,y:88}; map.clearSelection();
+  assert.equal(h.history.state.map.selected, null);
+  await h.serverEvent('index');
+  assert.equal(map.selected, null);
+  assert.deepEqual(JSON.parse(JSON.stringify(map.center)), {x:77,y:88});
+});
+
+test('clicking key hint spans activates reader and Details actions', async () => {
+  const h = await navigationHarness();
+  await h.clickHint('reader-actions', 'edit');
+  assert.equal(h.requests.filter(url => url === '/api/edit').length, 1);
+  await h.clickHint('reader-actions', 'details');
+  assert.equal(h.node('facts').hidden, false);
+  await h.clickHint('facts', 'edit');
+  assert.equal(h.requests.filter(url => url === '/api/edit').length, 2);
+  await h.clickHint('facts', 'details');
+  assert.equal(h.node('facts').hidden, true);
+  await h.clickHint('reader-actions', 'map');
+  assert.equal(h.node('map-view').hidden, false);
+});
+
+test('Mermaid loads only when a document contains a diagram', async () => {
+  const target = {root:'demo', path:'plot.mmd'};
+  const h = await navigationHarness({target, href:'http://localhost/read/demo/plot.mmd',
+    fileData:{file:{...target,title:'Plot'}, content:'graph LR\nA --> B', references:{inbound:[],outbound:[]}}});
+  assert.deepEqual(h.loadedLibraries, ['/vendor/mermaid.min.js']);
+  assert.equal(h.node('diagram').innerHTML, '<svg></svg>');
+});
+
+test('picker row keys follow the visible rows while the search input keeps native typing', async () => {
+  const files = [{root:'demo', path:'start.md', title:'Start'}, {root:'demo', path:'next.md', title:'Next'}];
+  const h = await navigationHarness({indexFiles:files});
+  await h.click('files-button');
+  await h.keyOn('file-0', 'j'); assert.equal(h.focused(), 'file-1');
+  await h.keyOn('file-1', 'ArrowUp'); assert.equal(h.focused(), 'file-0');
+  h.node('file-search').focus();
+  await h.keyOn('file-search', 'j'); assert.equal(h.focused(), 'file-search');
+});
+
+test('Details Escape closes its drawer before the map receives the key', async () => {
+  let mapKeys = 0;
+  const h = await navigationHarness({onMapKey:() => { mapKeys++; }});
+  await h.key('m'); await h.key('d');
+  assert.equal(h.node('facts').hidden, false);
+  await h.dispatchKey('Escape');
+  assert.equal(h.node('facts').hidden, true);
+  assert.equal(mapKeys, 0);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.instances[0].selected)), h.target);
+});
+
+test('index failure remains visible through file reload and clears on recovery', async () => {
+  const indexFailure = {message:''};
+  const h = await navigationHarness({indexFailure});
+  await h.serverEvent('index-error', {error:'cannot read config', generatedAt:'2026-09-25T12:00:00Z'});
+  assert.match(h.node('status').textContent, /cannot read config.*Retaining index/);
+  await h.serverEvent('file', h.target);
+  assert.match(h.node('status').textContent, /cannot read config/);
+  indexFailure.message = 'cannot read config';
+  await h.serverEvent('index');
+  assert.equal(h.node('retry').hidden, false);
+  indexFailure.message = '';
+  await h.serverEvent('index');
+  assert.equal(h.node('status').textContent, '');
 });
 
 test('reader load shows a loading line and titles 404, 413 and server errors by cause', async () => {
@@ -259,6 +347,15 @@ test('omitting setScope(null) leaves Whole map scoped on the shared instance', a
   await h.key('n'); assert.equal(h.instances[0].scope, null);
 });
 
+test('an index event updates the map once when its scope is unchanged', async () => {
+  const h = await navigationHarness(); await h.key('n');
+  const map = h.instances[0];
+  const indexCalls = map.indexCalls, scopeCalls = map.scopeCalls;
+  await h.serverEvent('index');
+  assert.equal(map.indexCalls - indexCalls, 1);
+  assert.equal(map.scopeCalls - scopeCalls, 0);
+});
+
 test('restoring a ghost-selected scoped visit keeps Whole map on the active file', async () => {
   const h = await navigationHarness(); await h.key('n');
   h.entries[1].state.map.selected = {id:'ghost:demo:start.md:path:4:missing.md'};
@@ -286,4 +383,14 @@ test('creating a companion graph makes repeated scope visits allocate a second m
   assert.equal(h.instances.length, 1); assert.equal(h.instances[0].container.id, 'map-view');
   const html = fs.readFileSync(path.join(root, 'reader/index.html'), 'utf8');
   assert.equal((html.match(/id="[^\"]*map[^\"]*"/g) || []).length, 2, 'only header map button and main canvas remain');
+});
+
+test('a map camera change reported by the map is what Back then Forward restores', async () => {
+  const h = await navigationHarness(); await h.key('m');
+  const map = h.instances[0];
+  Object.assign(map, {zoom:3.5, center:{x:-40, y:12}}); map.options.onViewChange();
+  Object.assign(map, {zoom:1, center:{x:0, y:0}});
+  await h.history.back(); assert.equal(h.node('read-view').hidden, false);
+  await h.history.forward();
+  assert.deepEqual(JSON.parse(JSON.stringify({zoom:map.zoom, center:map.center})), {zoom:3.5, center:{x:-40, y:12}});
 });

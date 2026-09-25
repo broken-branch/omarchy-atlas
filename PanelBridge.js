@@ -73,11 +73,13 @@ function kindArguments(draft) {
     if (!paths.length && !extensions.length) {
         if (!draft.builtin)
             return { error: "A new kind needs at least one path or extension.", field: "paths" }
-        // The CLI replaces the entire match when either list is supplied.
+        // A built-in with both lists cleared still needs a path match.
         paths = ["*"]
     }
-    paths.forEach(function (value) { args.push("--path=" + value) })
-    extensions.forEach(function (value) { args.push("--ext=" + value) })
+    if (!paths.length) args.push("--path=")
+    else paths.forEach(function (value) { args.push("--path=" + value) })
+    if (!extensions.length) args.push("--ext=")
+    else extensions.forEach(function (value) { args.push("--ext=" + value) })
     return { arguments: args }
 }
 

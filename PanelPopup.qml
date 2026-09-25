@@ -3,6 +3,7 @@ import QtQuick.Window
 import QtQuick.Controls as Controls
 import qs.Commons
 import qs.Ui
+import "ui/IndexModel.js" as IndexModel
 
 KeyboardPanel {
     id: view
@@ -108,7 +109,7 @@ KeyboardPanel {
             else if (key === "e")
                 atlas.editSelected();
             else if (key === "r")
-                atlas.refreshIndex();
+                atlas.retryFailure(IndexModel.failureCommand(atlas.refreshError, atlas.searchError, atlas.costError));
         }
         Flickable {
             id: listFlick

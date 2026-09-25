@@ -3,11 +3,11 @@
   "generatedAt": "2026-09-19T00:00:00Z",
   "roots": [{"name":"alpha","path":"/fixture/alpha","git":false,"impact":"present"},{"name":"beta","path":"/fixture/beta","git":false,"impact":"absent"}],
   "files": [
-    {"root":"alpha","path":"README.md","kind":"readme","title":"Start","bytes":100,"lines":10,"time":"2026-09-18T00:00:00Z","timeSource":"mtime","inbound":0,"outbound":1,"orphan":false,"dangling":0,"stale":null},
-    {"root":"alpha","path":"guide.md","kind":"doc","title":"Guide","bytes":100,"lines":10,"time":"2026-09-18T00:00:00Z","timeSource":"mtime","inbound":4,"outbound":2,"orphan":false,"dangling":2,"stale":{"root":"alpha","path":"guide.md","time":"2026-09-18T00:00:00Z","newestSource":{"path":"src/main.py","time":"2026-09-19T00:00:00Z"},"rule":"impact.yml#1"}},
-    {"root":"alpha","path":"loose.md","kind":"doc","title":"Loose end","bytes":100,"lines":10,"time":"2026-09-18T00:00:00Z","timeSource":"mtime","inbound":0,"outbound":1,"orphan":true,"dangling":0,"stale":null},
-    {"root":"alpha","path":"logs/day.md","kind":"log","title":"Daily","bytes":100,"lines":10,"time":"2026-09-18T00:00:00Z","timeSource":"mtime","inbound":0,"outbound":1,"orphan":false,"dangling":0,"stale":null},
-    {"root":"beta","path":"guide.md","kind":"doc","title":"Other guide","bytes":100,"lines":10,"time":"2026-09-18T00:00:00Z","timeSource":"mtime","inbound":0,"outbound":0,"orphan":true,"dangling":0,"stale":null}
+    {"root":"alpha","path":"README.md","kind":"readme","title":"Start","bytes":100,"lines":10,"time":"2026-09-18T00:00:00Z","timeSource":"mtime","modified":"2026-09-18T00:00:00Z","open":false,"inbound":0,"outbound":1,"orphan":false,"dangling":0,"stale":null},
+    {"root":"alpha","path":"guide.md","kind":"doc","title":"Guide","bytes":100,"lines":10,"time":"2026-09-18T00:00:00Z","timeSource":"mtime","modified":"2026-09-18T00:00:00Z","open":false,"inbound":4,"outbound":2,"orphan":false,"dangling":2,"stale":{"root":"alpha","path":"guide.md","time":"2026-09-18T00:00:00Z","newestSource":{"path":"src/main.py","time":"2026-09-19T00:00:00Z"},"rule":"impact.yml#1"}},
+    {"root":"alpha","path":"loose.md","kind":"doc","title":"Loose end","bytes":100,"lines":10,"time":"2026-09-18T00:00:00Z","timeSource":"mtime","modified":"2026-09-18T00:00:00Z","open":false,"inbound":0,"outbound":1,"orphan":true,"dangling":0,"stale":null},
+    {"root":"alpha","path":"logs/day.md","kind":"log","title":"Daily","bytes":100,"lines":10,"time":"2026-09-18T00:00:00Z","timeSource":"mtime","modified":"2026-09-18T00:00:00Z","open":false,"inbound":0,"outbound":1,"orphan":false,"dangling":0,"stale":null},
+    {"root":"beta","path":"guide.md","kind":"doc","title":"Other guide","bytes":100,"lines":10,"time":"2026-09-18T00:00:00Z","timeSource":"mtime","modified":"2026-09-18T00:00:00Z","open":false,"inbound":0,"outbound":0,"orphan":true,"dangling":0,"stale":null}
   ],
   "references": [
     {"from":{"root":"alpha","path":"README.md"},"to":{"root":"alpha","path":"guide.md"},"style":"markdown","line":2,"text":"[Guide](guide.md)","resolved":true,"pointer":false},

@@ -63,7 +63,7 @@ docs/ tests/ scripts/
   inputs defined in the contract and serves `/theme.css` as CSS custom
   properties. A `theme` SSE event fires when effective values change. No template
   to install, nothing of ours in `~/.config/omarchy/themed/`.
-- **Time source**: last commit time from `git log -1 --format=%ct` in git
+- **Time source**: last commit time from one Git history traversal per git
   roots (clone time makes mtime meaningless), else mtime. File discovery uses
   `git ls-files -co --exclude-standard` in git roots so `node_modules`,
   `.venv` and build output fall out with the project's own ignore rules;
@@ -91,8 +91,8 @@ keyboard — where QML is strong) from the *reader and map* (typography,
 highlighting, diagrams, a thousand animated nodes — where the browser is
 strong) is cheaper than either trying to do both.
 
-The workload is small: hundreds of Markdown files, link extraction in
-milliseconds, the reader I/O-bound in a browser. Nothing here is faster or
+The workload is small: hundreds of Markdown files, with the reader I/O-bound
+in a browser. Nothing here is faster or
 safer for being compiled.
 
 ## Rejected

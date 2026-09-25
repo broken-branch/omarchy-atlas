@@ -6,6 +6,20 @@ const path = require('node:path');
 const root = path.join(__dirname, '../..');
 const source = fs.readFileSync(path.join(root, 'reader/app.js'), 'utf8');
 const app = import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
+
+test('recency boundaries and open editor override use browser time', async () => {
+  const {recency, recencyHTML} = await app;
+  const now = Date.parse('2026-09-25T12:00:00Z');
+  const file = age => ({root:'demo', path:'guide.md', modified:new Date(now - age).toISOString(), open:false});
+  assert.equal(recency(file(29 * 60000 + 59000), now).level, 'hot');
+  assert.equal(recency(file(30 * 60000 + 1000), now).level, 'warm');
+  assert.equal(recency(file(24 * 3600000 + 1000), now), null);
+  assert.deepEqual(recency({...file(48 * 3600000), open:true}, now), {level:'hot', label:'open in editor'});
+  assert.match(recencyHTML(file(5 * 3600000), true, now), /edited 5 h ago/);
+  assert.match(recencyHTML(file(5 * 3600000), false, now), /class="recency".*recency-dot/);
+  assert.match(recencyHTML(file(4 * 60000), false, now), /role="img"[^>]*aria-label="edited 4 min ago"[^>]*>.*<span class="recency-label" aria-hidden="true">edited 4 min ago<\/span>/);
+  assert.match(recencyHTML(file(5 * 3600000), false, now), /data-level="warm"[^>]*>.*<span class="recency-label" aria-hidden="true"><\/span>/);
+});
 const vendor = {atob};
 vm.runInNewContext(fs.readFileSync(path.join(root, 'reader/vendor/markdown-it.min.js'), 'utf8'), vendor);
 vm.runInNewContext(fs.readFileSync(path.join(root, 'reader/vendor/highlight.min.js'), 'utf8'), vendor);
@@ -14,12 +28,12 @@ const destination = {root: 'demo', path: 'guide.md'};
 const ref = (style, line, text, to = destination) => ({from: target, to, style, line, text, resolved: !!to, pointer: false});
 
 test('routes preserve Unicode, spaces, anchors and distinct roots', async () => {
-  const {routeURL, parseRoute, targetKey} = await app;
+  const {routeURL, parseRoute} = await app;
   const selected = {root: 'a b', path: 'docs/日本 #.md'};
   assert.deepEqual(parseRoute(routeURL('read', selected, 'next steps')), {view:'read', target:selected, anchor:'next steps'});
   assert.equal(parseRoute('/map').view, 'map');
   assert.ok(parseRoute('/read/root/a%2Fb.md').error);
-  assert.notEqual(targetKey({root:'a/b', path:'c'}), targetKey({root:'a', path:'b/c'}));
+  assert.notEqual(routeURL('read', {root:'a/b', path:'c'}), routeURL('read', {root:'a', path:'b/c'}));
 });
 
 test('a filename byte that is not UTF-8 travels as that byte and round-trips', async () => {

@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.broken-branch.atlas",
   "name": "Atlas",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "broken-branch",
   "license": "MIT",
-  "description": "Maps the Markdown files in folders you register: links between them, files nothing links to, broken links, docs older than the code they describe, and the size of AI agent instruction files. Bar popup, browser reader and map, and a CLI for CI. Read-only.",
+  "description": "Map of the Markdown files in folders you register: links, orphans, broken links, stale docs, recent edits and AI agent instruction size",
   "kinds": [
     "bar-widget",
     "service"

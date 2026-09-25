@@ -15,7 +15,6 @@ MAX_SEARCH_MATCHES = 200
 
 
 def orphans(index: Mapping[str, Any], *, include_exempt: bool = False) -> dict[str, Any]:
-    """Return orphan facts already calculated by the indexer."""
     files = list(index["files"])
     result = {"orphans": [item for item in files if item["orphan"]]}
     result["exempt"] = ([item for item in files if item["kind"] in atlas_index.EXEMPT_KINDS
@@ -32,14 +31,12 @@ def not_indexed(index: Mapping[str, Any]) -> list[dict[str, str]]:
 
 
 def dangling(index: Mapping[str, Any]) -> dict[str, Any]:
-    """Return unresolved link facts already calculated by the indexer."""
     return {"dangling": [item for item in index["references"]
                          if item["style"] in atlas_index.DANGLING_STYLES and not item["resolved"]],
             "unavailable": not_indexed(index)}
 
 
 def stale(index: Mapping[str, Any]) -> dict[str, Any]:
-    """Return stale facts and the indexer's explicit unavailable reasons."""
     return {"stale": [item["stale"] for item in index["files"] if item["stale"] is not None],
             "unavailable": list(index.get("unavailable", []))}
 
@@ -66,26 +63,31 @@ def search(index: Mapping[str, Any], query: str) -> dict[str, Any]:
     """Case-insensitive path/title/content search, capped at 200 rows."""
     needle = query.casefold()
     matches: list[dict[str, Any]] = []
+    unavailable = not_indexed(index)
     for file in index["files"]:
         path_match = needle in file["path"].casefold()
         title_match = needle in file["title"].casefold()
         try:
-            text = _document_path(index, file).read_text(encoding="utf-8", errors="replace")
+            path = _document_path(index, file)
+            with path.open("rb") as source:
+                size = os.fstat(source.fileno()).st_size
+                raw = source.read(atlas_index.MAX_FILE_BYTES + 1) if size <= atlas_index.MAX_FILE_BYTES else b""
         except OSError as exc:
             raise atlas_index.IndexError("not_found", f"file unavailable: {file['root']}/{file['path']}") from exc
+        if size > atlas_index.MAX_FILE_BYTES or len(raw) > atlas_index.MAX_FILE_BYTES:
+            unavailable.append({"root": file["root"], "path": file["path"],
+                                "reason": "content exceeds 2 MB"})
+        text = raw.decode("utf-8", "replace")
         content_rows = [(number, line) for number, line in enumerate(text.splitlines(), start=1)
                         if needle in line.casefold()]
         if content_rows:
             for number, line in content_rows:
-                matches.append({"file": file, "line": number, "text": line})
-                if len(matches) == MAX_SEARCH_MATCHES:
-                    return {"matches": matches, "unavailable": not_indexed(index)}
-        elif path_match or title_match:
+                if len(matches) < MAX_SEARCH_MATCHES:
+                    matches.append({"file": file, "line": number, "text": line})
+        elif (path_match or title_match) and len(matches) < MAX_SEARCH_MATCHES:
             matches.append({"file": file, "line": 0,
                             "text": file["path"] if path_match else file["title"]})
-            if len(matches) == MAX_SEARCH_MATCHES:
-                break
-    return {"matches": matches, "unavailable": not_indexed(index)}
+    return {"matches": matches, "unavailable": unavailable}
 
 
 def _line_count(data: bytes) -> int:

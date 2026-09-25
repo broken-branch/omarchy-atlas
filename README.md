@@ -15,9 +15,18 @@ Atlas has three parts that share one index:
   the active Omarchy theme;
 - the `atlas` command line, for you, your agents and CI.
 
-![The whole map of one root: one node per Markdown file, lines for references between files](docs/assets/whole-map.png)
+![Filament whole map in Tokyo Night, showing Markdown files and their references](docs/assets/whole-map.png)
 
-![The reader showing a document with its outline, file facts and Map, Edit and Details actions](docs/assets/reader.png)
+![The same map view in the light Catppuccin Latte theme](docs/assets/light.png)
+
+![Reader showing a Markdown document and a red recency pill](docs/assets/reader.png)
+
+![Neighbourhood map showing a document and its direct references](docs/assets/neighbourhood.png)
+
+![Contact sheet of the map in all 22 Omarchy themes](docs/assets/themes.png)
+
+Atlas follows every Omarchy theme live; the theme tests and `scripts/theme-shots`
+exercise the browser views.
 
 ## Requirements
 
@@ -62,8 +71,8 @@ A drive, or A path. `atlas roots` lists them and `atlas root-remove NAME`
 removes one; removing a root never touches its files.
 
 In a git repository Atlas lists files with `git ls-files`, so the project's
-own ignore rules apply, and dates a file by its last commit. Outside git it
-walks the folder, skips `node_modules`, `.venv`, `build` and similar
+own ignore rules apply, and dates files from one Git history pass per root.
+Outside git it walks the folder, skips `node_modules`, `.venv`, `build` and similar
 directories, and uses the file's modification time.
 
 ## Using Atlas
@@ -71,25 +80,32 @@ directories, and uses the file's modification time.
 **Popup.** Click the Atlas mark in the bar, or run
 `omarchy-shell io.github.broken-branch.atlas toggle` (also `open` and
 `close`). The popup shows the roots, the findings (orphan files, dangling
-references, stale files), All files and the map. Pick a file to see its
+references, stale files), Recently edited, All files and the map. Pick a file to see its
 facts: kind, date, references in and out. Atlas sets no key binding; to add
 one, bind that command in `~/.config/hypr/bindings.lua`. Right-clicking the
 mark opens the selected file in the reader.
 
 **Reader.** Opens a document with headings, tables, task lists, highlighted
-code, Mermaid diagrams, an outline and a backlinks footer. Links between
-files work in every reference style Atlas indexes. The header has Back,
-Forward and Files; Previous file and Next file walk the list you opened the
+code, Mermaid diagrams, an outline and a backlinks footer. The header has
+Back, Forward and Files; Previous file and Next file walk the list you opened the
 document from; Edit opens it in the Omarchy default editor. The reader
-reloads when a file changes and restyles when the theme changes.
+reloads when a file changes and restyles when the theme changes. Indexed
+references in document text are links in the reader; impact relationships
+from `docs/impact.yml` appear in facts and the map.
 
 **Map.** Neighbourhood shows one document with the files it links to and the
 files that link to it. Whole map shows every file as a node and every
 reference as a line, coloured by kind and grouped by root. Hover to isolate a
 file's links, drag to pan, scroll to zoom, search to fly to a file, click to
-select it, Enter to read it. Orphans sit at the edge, broken link targets are
-hollow, stale files are ringed. Log files are hidden until you turn them on
-in the Kinds filter.
+select it, double-click or Enter to read it. Orphans sit at the edge, broken
+link targets are hollow, and stale files carry a yellow tick. Log files are
+hidden until you turn them on in the Kinds filter.
+
+The reader and map mark files open in an editor or modified within 30 minutes
+in red; files modified within 24 hours are orange. The map shows counts for
+both and has a Recent filter. The popup's Recently edited list includes open
+files regardless of their modification age. Editor detection has limits;
+see the [recency rule](docs/contract.md#definitions).
 
 From the command line, `atlas show --root NAME --path REL` opens a file in
 the reader and `--map` opens it in the whole map.
@@ -118,10 +134,12 @@ Keys never act while you type in a search field or other text entry.
 | `0` | — | — | Back to the last `atlas show` target |
 | `v` | — | Neighbourhood labels on / off | Labels on / off |
 | `c` | — | — | Hide / show the controls |
+| `z` | — | Hide / show the top bar | Hide / show the top bar |
 | `+` / `-` | — | Zoom the neighbourhood graph | Zoom |
 | Alt+Left / Alt+Right | — | Browser back / forward | Browser back / forward |
 
 Right-click a node in the map to hold it in place or release it.
+The visible handle restores a hidden top bar.
 
 ## Command line
 
@@ -214,16 +232,18 @@ in your home folder alone are enough:
 
 | Agent | Loaded at startup |
 | --- | --- |
-| Claude Code | `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/*.md`, `~/.claude/CLAUDE.md`, the first 200 lines of the project's auto memory `MEMORY.md`, and every `@path` they import |
+| Claude Code | `CLAUDE.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md`, `.claude/rules/**/*.md` without a `paths` key, `~/.claude/CLAUDE.md`, the first 200 lines of the project's auto memory `MEMORY.md`, and every `@path` they import |
 | Codex | `AGENTS.md`, `~/.codex/AGENTS.md` |
 | Gemini CLI | `GEMINI.md`, `~/.gemini/GEMINI.md`, and their `@path` imports |
-| GitHub Copilot | `.github/copilot-instructions.md`, `.github/instructions/*.instructions.md` |
+| GitHub Copilot | `.github/copilot-instructions.md`, `.github/instructions/*.instructions.md` without an `applyTo` key |
 | Cursor | `.cursor/rules/*.mdc` with `alwaysApply: true`, `.cursorrules` |
 | Windsurf | `.windsurf/rules/*.md`, `.windsurfrules` |
 | Cline | `.clinerules` (a file or a directory) |
 
 Claude Code counts `AGENTS.md` only when a startup file imports it with
-`@AGENTS.md`.
+`@AGENTS.md`. Claude rules with `paths` and Copilot instructions with
+`applyTo` are referenced files, loaded for matching work rather than at
+startup; see the [cost table](docs/contract.md#definitions).
 
 Each row leads with the startup total and lists the startup files largest
 first. A second, separate figure counts what those files only mention, plus
@@ -278,6 +298,10 @@ rm ~/.local/bin/atlas
 
 The first line removes the plugin and stops its server. The second removes
 your roots and the index; the third removes the link, if you made one.
+
+## Development
+
+Try Atlas on a demo workspace: run `sh scripts/demo-workspace OUT-DIR` and add the four generated projects as roots.
 
 ## Documentation
 

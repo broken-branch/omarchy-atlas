@@ -68,7 +68,7 @@ when its request generation is current.
 | `root-add PATH [--name NAME]` | `{config}`; PATH must be an existing directory, stored canonical; NAME defaults to the basename (`system` for `/`) and must be unique. A project, a drive's mount point or `/` are all valid roots. |
 | `root-remove NAME` | `{config}` |
 | `kinds` | `{kinds:[Kind]}` — the effective kind table: the user's entries first, in their order, then the built-ins. |
-| `kind-set ID [--label TEXT] [--colour NAME-OR-HEX] [--path GLOB]... [--ext .EXT]...` | `{config}`; creates or updates the user's entry for ID (an existing built-in ID overrides its label, colour or match; a new ID adds a kind). ID is `[a-z][a-z0-9-]*`; a colour is one of the theme's names (`red yellow orange green cyan blue magenta brown bright_red bright_yellow bright_green bright_cyan bright_blue bright_magenta muted accent foreground`) or `#rrggbb`; a new kind needs at least one `--path` or `--ext` |
+| `kind-set ID [--label TEXT] [--colour NAME-OR-HEX] [--path GLOB]... [--ext .EXT]...` | `{config}`; creates or updates the user's entry for ID (an existing built-in ID overrides its label, colour or match; a new ID adds a kind). An omitted `--path` or `--ext` retains that match list; `--path=` or `--ext=` clears it. ID is `[a-z][a-z0-9-]*`; a colour is one of the theme's names (`red yellow orange green cyan blue magenta brown bright_red bright_yellow bright_green bright_cyan bright_blue bright_magenta muted accent foreground`) or `#rrggbb`; a new kind needs at least one `--path` or `--ext` |
 | `kind-remove ID` | `{config}`; removes the user's entry (a built-in returns to its default; an added kind disappears and its files fall to the next match) |
 | `index [--root NAME]` | `{index}`; rebuilds and writes the cache |
 | `files [--root NAME] [--kind KIND]` | `{files:[File], unavailable:[{root,path?:REL,reason}]}` from the saved index |
@@ -77,10 +77,10 @@ when its request generation is current.
 | `dangling [--root NAME]` | `{dangling:[Reference], unavailable:[{root,path?:REL,reason}]}` |
 | `stale [--root NAME]` | `{stale:[Stale], unavailable:[{root,path?:REL,reason}]}` |
 | `cost [--root NAME]` | `{roots:[Cost], unavailable:[{root,path?:REL,reason}]}`; text output gives each row's startup total, then its startup files, largest first |
-| `search QUERY [--root NAME]` | `{matches:[{file:File, line:N, text:"…"}], unavailable:[{root,path?:REL,reason}]}`; case-insensitive substring over paths, titles and content, first 200 matches; one row per matching content line, and a path/title-only match uses `line:0` with the matched metadata text |
+| `search QUERY [--root NAME]` | `{matches:[{file:File, line:N, text:"…"}], unavailable:[{root,path?:REL,reason}]}`; case-insensitive substring over paths, titles and content, first 200 matches; one row per matching content line, and a path/title-only match uses `line:0` with the matched metadata text. Content above 2 MB is not searched; its path/title can still match, and `unavailable` names the file with `content exceeds 2 MB`. |
 | `show --root NAME --path REL [--map]` | `{clients:N}`; POSTs `/api/show` with `view` `read` or `map`; if the server is up with 0 clients, or down, launches the window at `/read/NAME/REL` or `/map/NAME/REL` with argv `["omarchy-launch-or-focus-webapp", "Atlas Reader", URL]` — the stock command takes a window pattern before the URL and matches it against window class or title; the reader's document title is `Atlas Reader` (the native popup uses a shell layer, so the two never match each other) and the pattern focuses the open app window instead of launching a second |
 | `edit --root NAME --path REL` | `{opened:true}`; runs `omarchy-launch-editor <abs>` |
-| `serve` | long-running, started by `Service.qml`; `--port` for tests only |
+| `serve` | long-running, started by `Service.qml`; `--port` for tests only; port 0 binds an ephemeral port and prints its number on stdout before serving |
 
 `REL` is root-relative, may not contain `..` segments, must resolve inside the
 root after canonicalisation, else `outside_roots`. `index` uses `git ls-files
@@ -121,7 +121,9 @@ to the file a symlink resolves to as well as to the listed name, so
 `denied` for `file`, `show` and `edit`. A file whose parent directory
 resolves outside the root is not indexed. A document larger than 2 MB is
 indexed from `stat` without being read: `bytes` is its size, `title` is the
-basename, `lines` is 0 and it has no outbound references.
+basename, `lines` is 0 and it has no outbound references. Name-based denial
+cannot identify a hardlink with an allowed name to a credential file: a user
+who creates such a hardlink inside a root can expose its bytes through Atlas.
 
 ## Shapes
 
@@ -138,8 +140,11 @@ cached at `~/.cache/omarchy-atlas/index.json`.
 
 `unavailable` preserves stale-analysis limitations through cache: `impact
 map absent`, `impact map unreadable`, `impact map exceeds 2 MB` or `impact
-map exceeds 100000 references` (root only), `mixed time sources` or `no
-usable source timestamp` (root and affected file). `stale` returns those same
+map exceeds 100000 matched paths` (root only), `mixed time sources` or `no
+usable source timestamp` or `timestamp outside supported range` (root and
+affected file). Out-of-range filesystem and Git times are clamped to
+`1970-01-01T00:00:00Z` through `9999-12-31T23:59:59.999999999Z` and the
+affected path is listed. `stale` returns those same
 entries; unavailable never silently means fresh. A registered root whose
 directory is gone is listed here too, as `{root, reason:"root missing"}`, and
 a nested checkout git could not list as `{root, path, reason:"git
@@ -152,7 +157,7 @@ config is never replaced. Sort
 files by root/path and references by source/line/style/text. Change detection
 compares semantic content, not `generatedAt`.
 
-`File`: `{"root":"name","path":"docs/adr/0007-x.md","kind":Kind,"type":".md","title":"first H1 or basename","bytes":N,"lines":N,"time":"ISO-8601 UTC","timeSource":"git"|"mtime","inbound":N,"outbound":N,"orphan":bool,"dangling":N,"stale":Stale|null}`.
+`File`: `{"root":"name","path":"docs/adr/0007-x.md","kind":Kind,"type":".md","title":"first H1 or basename","bytes":N,"lines":N,"time":"ISO-8601 UTC","timeSource":"git"|"mtime","modified":"ISO-8601 UTC","open":bool,"inbound":N,"outbound":N,"orphan":bool,"dangling":N,"stale":Stale|null}`.
 `type` is the lower-cased extension with its dot, `""` for none. `title` is
 the first ATX H1 for Markdown (up to three spaces of indent, `#` and
 whitespace; a closing `#` run is removed only after whitespace), else the
@@ -234,7 +239,8 @@ code too, because that is how these documents name files:
   dangling). The link text and the target may each contain one level of
   balanced brackets (`[see [1]](a[1].md)`); a bracket pair in the target is
   never followed by `(`, so one link never runs into the next. Resolved
-  relative to the referencing file's directory. Not extracted inside fenced
+  relative to the referencing file's directory after decoding percent escapes
+  in the path once (after separating the fragment). Not extracted inside fenced
   code blocks or inline code spans.
 - `wikilink`: `[[Name]]` or `[[Name|alias]]`. Resolved to the unique file in
   the same root whose basename is `Name.md`; zero or several candidates leave
@@ -244,9 +250,10 @@ code too, because that is how these documents name files:
   basename in the referencing file's directory. A sentence-ending `.` after
   the extension ends the token (`see ../a.md.`); a longer extension such as
   `.md.bak` is not a match. Resolved first relative to the
-  referencing file's directory, then to the root, then — for `~/` or absolute
-  tokens — against every registered root. An unresolved `path` token is prose,
-  not a reference; it is dropped, never reported.
+  referencing file's directory, then to the root. A relative token whose
+  resolved location is in another registered root uses that root; `~/` and
+  absolute tokens are checked against every registered root. An unresolved
+  `path` token is prose, not a reference; it is dropped, never reported.
 - `import`: a Claude or Gemini `@path` import in an `instruction`-kind file:
   `@` at the start of a line or after whitespace, then a path whose last
   segment has an extension (`@AGENTS.md`, `@docs/rules.md`,
@@ -263,13 +270,16 @@ code too, because that is how these documents name files:
   root's `impact` is `unreadable`, `stale` lists the root under `unavailable`,
   and no impact references exist. The same holds, with its own reason, for a
   map larger than 2 MB (refused from its size, before it is read) and for a
-  map whose rules would make more than 100000 impact references in the
-  root: the stale analysis is unavailable, never partial.
+  map whose sum of `matching docs + matching sources` over rules
+  exceeds 100000 in the root: the stale analysis is unavailable, never partial.
 
 Impact input is `{"rules":[{"source":["src/**"],"docs":["docs/guide.md"]}]}`;
 rule numbers are one-based array positions. Expand root-relative recursive
 globs, intersect with discovered files and reject escaping symlinks. Sources
 may have any extension; only indexed documents receive impact references.
+In these globs, `*` stays within one path segment and `**` crosses segments.
+Each rule's newest source timestamp is calculated once, then compared with
+its matching documents.
 `docs/impact.yml` is a reference source, not a File. Missing input is `absent`;
 invalid JSON or rule structure is `unreadable`, never a partial guessed map.
 
@@ -277,6 +287,29 @@ Repeated occurrences are separate references; suppress only path tokens
 already consumed by Markdown links. Resolve symlinks for containment and
 physical-file deduplication, preserving instruction entry-point identity.
 Files without a Git commit use mtime and must not be labelled Git time.
+Git roots obtain newest per-path commit times with one hardened history pass
+per root; uncommitted paths and an unborn HEAD (absent branch ref) use mtime.
+A present but unresolvable branch ref also uses mtime and adds
+`{root, reason:"git unavailable"}` to `unavailable` for that root.
+
+**Recency**: `modified` is the file's filesystem mtime in ISO-8601 UTC,
+independent of `time` and `timeSource`. Clients compare it with their own
+clock: red when `open` is true or modification was within 30 minutes; orange
+when modification was within 24 hours and red does not apply. Older files
+have no recency highlight. A future mtime counts as now. Stale analysis
+continues to use `time`.
+The map's Recent filter and the popup's Recently edited list include files
+with `open:true` regardless of modification age, plus files modified within
+24 hours. Counts use that same membership rule.
+`open` is true when any of these files exists: a Neovim/Vim swap in
+`~/.local/state/nvim/swap/` whose name is the absolute file path with `/`
+replaced by `%`, followed by `.swp`, `.swo` and so on through `.swa`;
+Vim's `.NAME.swp` beside the file; or Emacs's `.#NAME` lock beside the file.
+Git-tracked local swap and lock files do not count as editor markers.
+The swap directory is listed once per index build; swap contents are never
+read. Other editor conventions and open files without these markers are not
+detected, so `open` can be false while a file is open. Leftover markers can
+make it true after an editor exits.
 
 **Orphan**: a `File` with zero inbound references of any style whose kind is
 not `instruction`, `readme` or `log`. Those kinds are entry points or
@@ -361,28 +394,35 @@ Unknown routes 404. No caching headers beyond `ETag` on `/api/file` and
 | `GET /`, `GET /read/<root>/<path>`, `GET /map`, `GET /map/<root>/<path>` | the app (`reader/index.html`); it reads view and target from the location |
 | `GET /app.js`, `/app.css`, `/map.js`, `/map.css`, `/vendor/<file>` | static files from `reader/` |
 | `GET /theme.css` | Palette/control CSS properties from the theme inputs below; neutral dark fallback when absent |
-| `GET /api/index` | `index` (rebuilt first if older than 2 s) |
+| `GET /api/index` | `index` (rebuilt first if older than 2 s); 503 with the rebuild error when refresh fails, including when a previous index is retained internally |
 | `GET /api/file?root=&path=` | `{file:File, content, cost:[Cost], references:{inbound:[Reference], outbound:[Reference]}}`; `cost` holds the file's root/agent cost rows (the `cost --json` shape) whose `startup` lists it, when it is an `instruction`-kind file, else `[]`, and is also `[]` when a cost input cannot be read (the file still loads); non-UTF-8 content returns `binary:true, bytes` instead of `content`; over 2 MB is 413 |
 | `GET /raw/<root>/<path>` | the file bytes, with a fixed content-type table keyed by the suffix of the file the path resolves to, for images (`.png .jpg .jpeg .gif .svg .webp`) anywhere in a root and for indexed files of type `.md .mmd .mermaid .txt .json .yml .yaml .toml .csv`; a non-indexed non-image file is 404 `document is not indexed`; other extensions 404; sandbox CSP above |
-| `GET /api/events` | `text/event-stream`: `index` (semantic index changed), `file` (`{root,path}` whose content/existence changed), `theme` (effective theme changed), `show` (`{root,path,view}`) |
+| `GET /api/events` | `text/event-stream`: `index` (semantic index changed, a failed refresh recovered, or more than 16 file fingerprints changed), `index-error` (`{error,generatedAt}` when refresh fails after a successful index), `file` (`{root,path}` whose content/existence changed in a refresh of at most 16 files), `theme` (effective theme changed), `show` (`{root,path,view}`) |
 | `POST /api/show` | body `{root,path,view:"read"\|"map"}`; broadcasts `show`; returns `{clients:N}` |
 | `POST /api/edit` | body `{root,path}`; runs `omarchy-launch-editor <abs>`; returns `{opened:true}` |
 
-Lazy re-index: a request arriving more than 2 s after the last index rebuilds
-first. While SSE clients are connected, refresh every 2 s even without a new
-GET; idle readers must see saves. Serialise rebuilds. Emit `index` when files,
+Lazy re-index: after 2 s, compare a cheap signature of candidate paths and
+their mtime/size, config, each Git root's HEAD and index mtime, impact map,
+and editor-marker listings. Reuse the prior index when it is unchanged.
+While SSE clients are connected, check every 2 s even without a new GET;
+idle readers must see saves. A GET without an SSE client starts a due refresh
+and serves the last index while it builds. The first GET builds synchronously.
+Serialise rebuilds without holding the request lock. Emit `index` when files,
 references or analyses change even if summary counts stay equal. Track
 content fingerprints internally for `file` events: analytical Git time must
-not hide uncommitted editor saves. A file above 2 MB is never read for its
-fingerprint; its size and modification time stand for its content. Deletion emits the old root/path and the
-reader reports missing. SSE must not block other clients or normal requests;
-clean up disconnected clients. Subscribers count as reader instances for
+not hide uncommitted editor saves. Fingerprints include filesystem mtime and
+`open` so metadata-only changes also emit events. A file above 2 MB is never
+read for its fingerprint; its size and modification time stand for its content.
+Deletion emits the old root/path and the
+reader reports missing. A refresh that changes more than 16 file fingerprints
+emits one `index` event instead of per-file `file` events. SSE must not block
+other clients or normal requests; clean up disconnected clients. Subscribers count as reader instances for
 `show`.
 
 Sample theme inputs every 2 s while clients are connected, independently of
 index failures. Palette comes from the top-level keys in current `colors.toml`:
-the surface/text roles `background`, `dark_background`, `darker_background`,
-`lighter_background`, `foreground`, `dark_foreground`, `light_foreground`,
+the surface/text roles `background`, `dark_background`,
+`lighter_background`, `foreground`, `light_foreground`,
 `bright_foreground`, `accent`, `selection`, `muted` and `mode`; the named
 colours `red`, `yellow`, `orange`, `green`, `cyan`, `blue`, `magenta`, `brown`;
 and `bright_red`, `bright_yellow`, `bright_green`, `bright_cyan`, `bright_blue`
@@ -412,7 +452,8 @@ style tokens consumed by app/map CSS are `--font-size`, `--font-size-small`,
 tokens, including `--selection`, continue to come only from `colors.toml`.
 Native QML uses live `Color`/`Style` directly. Browser corners sample
 `hyprctl -j getoption decoration:rounding` with a short timeout and square
-fallback; use the system monospace alias. No shell evaluation/config writes.
+fallback once, and again when the theme or a Hyprland `.conf` file changes;
+use the system monospace alias. No shell evaluation/config writes.
 Missing or malformed individual tokens use their token defaults. Compare
 effective values, including atomic file replacement, not merely a poll tick.
 Absent theme uses defaults; a malformed TOML replacement retains the last good

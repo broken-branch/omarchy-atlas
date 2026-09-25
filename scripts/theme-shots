@@ -1,0 +1,94 @@
+#!/bin/sh
+set -eu
+
+if [ "$#" -lt 2 ]; then
+  printf 'usage: %s OUT-DIR ROOT-DIR [ROOT-DIR ...] [--size WxH] [--scale N] [--read ROOT/REL] [-- THEME ...]\n' "$0" >&2
+  exit 2
+fi
+project=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+real_home=$HOME
+out=$(mkdir -p "$1" && CDPATH= cd -- "$1" && pwd)
+shift
+size=1600x1000 scale=1 read_target=
+roots=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --) shift; break ;;
+    --size) [ "$#" -ge 2 ] || { echo '--size needs WxH' >&2; exit 2; }; size=$2; shift 2 ;;
+    --scale) [ "$#" -ge 2 ] || { echo '--scale needs N' >&2; exit 2; }; scale=$2; shift 2 ;;
+    --read) [ "$#" -ge 2 ] || { echo '--read needs ROOT/REL' >&2; exit 2; }; read_target=$2; shift 2 ;;
+    *) roots="$roots
+$1"; shift ;;
+  esac
+done
+theme_args=
+theme_newline=
+for theme_arg do theme_args="$theme_args$theme_newline$theme_arg"; theme_newline="
+"; done
+[ -n "$roots" ] || { echo 'at least one root is required' >&2; exit 2; }
+set --
+old_ifs=$IFS; IFS='
+'
+for root in $roots; do set -- "$@" "$(CDPATH= cd -- "$root" && pwd)"; done
+IFS=$old_ifs
+[ "$#" -gt 0 ] || { echo 'at least one root is required' >&2; exit 2; }
+for command in python3 node chromium; do command -v "$command" >/dev/null 2>&1 || { printf 'missing %s\n' "$command" >&2; exit 2; }; done
+tmp=$(mktemp -d)
+server_pid= browser_pid=
+cleanup() {
+  if [ -n "$browser_pid" ]; then kill "$browser_pid" 2>/dev/null || :; wait "$browser_pid" 2>/dev/null || :; fi
+  if [ -n "$server_pid" ]; then kill "$server_pid" 2>/dev/null || :; wait "$server_pid" 2>/dev/null || :; fi
+  rm -rf -- "$tmp"
+}
+trap cleanup EXIT HUP INT TERM
+themes=$theme_args
+if [ -z "$themes" ]; then
+  for directory in /usr/share/omarchy/themes/* "$real_home"/.config/omarchy/themes/*; do
+    [ -f "$directory/colors.toml" ] || continue
+    themes="$themes
+$directory"
+  done
+fi
+[ -n "$themes" ] || { printf 'no themes found\n' >&2; exit 2; }
+port() { python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'; }
+rows=$tmp/rows.jsonl; : > "$rows"
+old_ifs=$IFS; IFS='
+'
+for entry in $themes; do
+  IFS=$old_ifs
+  if [ -d "$entry" ]; then theme_dir=$entry
+  elif [ -d "$real_home/.config/omarchy/themes/$entry" ]; then theme_dir=$real_home/.config/omarchy/themes/$entry
+  else theme_dir=/usr/share/omarchy/themes/$entry; fi
+  [ -f "$theme_dir/colors.toml" ] || { printf 'theme missing: %s\n' "$entry" >&2; exit 2; }
+  theme_dir=$(CDPATH= cd -- "$theme_dir" && pwd)
+  theme=$(basename "$theme_dir")
+  case "$theme" in .|..) printf 'invalid theme name: %s\n' "$theme" >&2; exit 2 ;; esac
+  home=$tmp/$theme
+  mkdir -p "$home/.local/state/omarchy/current/theme" "$home/.config" "$home/.cache"
+  cp -R "$theme_dir/." "$home/.local/state/omarchy/current/theme/"
+  export HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_CACHE_HOME="$home/.cache"
+  for root in "$@"; do python3 -B "$project/atlas.py" root-add "$root" >/dev/null; done
+  server_port=$(port); cdp_port=$(port); server_url=http://127.0.0.1:$server_port
+  python3 -B "$project/atlas.py" serve --port "$server_port" >"$home/server.log" 2>&1 & server_pid=$!
+  python3 - "$server_url/theme.css" <<'PYTHON'
+import sys, time, urllib.error, urllib.request
+for _ in range(100):
+    try:
+        with urllib.request.urlopen(sys.argv[1], timeout=0.2) as response:
+            if response.status == 200: break
+    except (OSError, urllib.error.URLError): time.sleep(0.1)
+else: raise SystemExit('Atlas server did not start')
+PYTHON
+  chromium --headless=new --no-first-run --user-data-dir="$home/chromium" --remote-debugging-port="$cdp_port" --window-size="${size%x*},${size#*x}" --force-device-scale-factor="$scale" "$server_url/map" >"$home/chromium.log" 2>&1 & browser_pid=$!
+  expected=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["background"])' "$theme_dir/colors.toml")
+  node "$project/scripts/theme-shots.js" "$theme" "$expected" "$server_url" "http://127.0.0.1:$cdp_port" "$out" "$size" "$scale" "$read_target" "$@" >> "$rows"
+  kill "$browser_pid" 2>/dev/null || :; wait "$browser_pid" 2>/dev/null || :; browser_pid=
+  kill "$server_pid" 2>/dev/null || :; wait "$server_pid" 2>/dev/null || :; server_pid=
+  IFS='
+'
+done
+IFS=$old_ifs
+summary_failed=0
+node "$project/scripts/theme-shots.js" --summary "$rows" "$out/summary.json" || summary_failed=1
+if command -v magick >/dev/null 2>&1; then magick montage "$out"/*-map.png "$out"/*-reader.png "$out"/*-neighbourhood.png -thumbnail 800x500 -tile 2x -geometry +8+8 "$out/montage.png"; fi
+[ "$summary_failed" -eq 0 ]

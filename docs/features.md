@@ -14,13 +14,15 @@
    enabled; click it or run
    `omarchy-shell io.github.broken-branch.atlas toggle`. Search paths, titles
    and content, pick a root, open a finding (orphan files, dangling
-   references, stale files) or All files, select a file, see its facts.
+   references, stale files), Recently edited or All files, select a file,
+   see its facts. Recently edited includes open files of any age.
 4. Read. `o` or Enter in the popup, `atlas show --root NAME --path REL`, or a
    link in the reader opens the document in the reader window with the
    active Omarchy theme: headings, tables, task lists, highlighted code,
-   Mermaid diagrams, an outline, and a backlinks footer. Every reference
-   style in the [reference](contract.md#definitions) is a working link. The
-   header carries Back, Forward, the breadcrumb and Files · Neighbourhood ·
+   Mermaid diagrams, an outline, and a backlinks footer. Indexed references
+   in document text can be followed; impact relationships from
+   `docs/impact.yml` appear in facts and the map. The header carries Back,
+   Forward, the breadcrumb and Files · Neighbourhood ·
    Whole map; Files opens the picker for one root or all roots; Previous
    file / Next file walk the list the document was opened from; the action
    row is Map · Edit · Details. `e` opens the file in the Omarchy default
@@ -36,11 +38,16 @@
    `--path`) or Whole map opens the browser map as a history destination:
    every file as a node, every reference as an edge, coloured by kind,
    clustered by root, hover to isolate a neighbourhood, pan and zoom, filter,
-   search-and-fly, click to read. Orphans sit at the fringe, dangling targets
-   are hollow, stale files are ringed. Back returns to the document, and Back
+   search-and-fly, click to select, double-click or Enter to read. Orphans sit
+   at the fringe, dangling targets are hollow, and stale files have a yellow
+   tick. Back returns to the document, and Back
    from a document opened off the map restores the map view.
-6. Keep working. The reader and map reload on file change and restyle on
-   theme change without a restart; the popup re-indexes on `r` and shows the
+6. Keep working. Files open in an editor or modified within 30 minutes have
+   red recency marks; files modified within 24 hours have orange marks. The
+   map shows both counts and a Recent filter that includes open files of any
+   age. See the [exact rule and marker limits](contract.md#definitions).
+   The reader and map reload on file change and restyle on theme change
+   without a restart; the popup re-indexes on `r` and shows the
    time of its data. The [README's key table](../README.md#keys) lists every
    key.
 
@@ -50,8 +57,9 @@
   document, and never writes outside `~/.config/omarchy-atlas/` and
   `~/.cache/omarchy-atlas/`.
 - Definitions are the [reference's](contract.md#definitions). An orphan is a
-  file nothing refers to in any style Atlas can read; a dangling link is a
-  Markdown link or wikilink with no target; stale is measured only where
+  file nothing refers to in any style Atlas can read; a dangling reference is
+  a Markdown link, wikilink or `@path` import with no target, within the
+  [reference limits](contract.md#definitions); stale is measured only where
   `docs/impact.yml` ([format](../README.md#stale-files)) says what a doc
   depends on. Missing inputs produce an `unavailable` line, not a guess.
 - Cross-root references (`~/Projects/notes/CLAUDE.md` from another root's

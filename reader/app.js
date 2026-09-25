@@ -1,6 +1,5 @@
 const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
 export const sameTarget = (a, b) => !!a && !!b && a.root === b.root && a.path === b.path;
-export const targetKey = target => JSON.stringify([target.root, target.path]);
 // The server names a filename byte that is not UTF-8 as a lone surrogate
 // U+DC80–U+DCFF (Python's surrogateescape). URLs carry it as that byte again.
 const ESCAPED_BYTE = /((?<![\uD800-\uDBFF])[\uDC80-\uDCFF])/;
@@ -46,6 +45,23 @@ export function referenceHTML(ref, label = ref.text) {
   let decoded = anchor;
   try { decoded = decodeURIComponent(anchor); } catch { /* Keep a literal malformed anchor. */ }
   return `<a href="${escapeHTML(routeURL('read', ref.resolved && ref.to ? ref.to : ref.from, decoded))}"${ref.resolved ? '' : ' data-missing="true"'}>${escapeHTML(label)}${ref.resolved ? '' : ' <span class="missing">(missing)</span>'}</a>`;
+}
+export function recency(file, now = Date.now()) {
+  if (file?.open) return {level:'hot', label:'open in editor'};
+  const modified = Date.parse(file?.modified);
+  if (!Number.isFinite(modified)) return null;
+  const age = Math.max(0, now - modified);
+  if (age > 24 * 60 * 60 * 1000) return null;
+  const level = age <= 30 * 60 * 1000 ? 'hot' : 'warm';
+  const minutes = Math.floor(age / 60000);
+  const label = minutes < 1 ? 'edited just now' : minutes < 60 ? `edited ${minutes} min ago` : `edited ${Math.floor(minutes / 60)} h ago`;
+  return {level, label};
+}
+export function recencyHTML(file, pill = false, now = Date.now()) {
+  const value = recency(file, now);
+  if (!value) return '';
+  const root = escapeHTML(file.root), path = escapeHTML(file.path);
+  return `<span class="recency${pill ? ' recency-pill' : ''}" role="img" data-recency-root="${root}" data-recency-path="${path}" data-level="${value.level}" aria-label="${value.label}" title="${value.label}"><span class="recency-dot" aria-hidden="true"></span><span class="recency-label" aria-hidden="true">${pill || value.level === 'hot' ? escapeHTML(value.label) : ''}</span></span>`;
 }
 export function themeOptions(get) {
   return {startOnLoad: false, securityLevel: 'strict', theme: 'base', themeVariables: {
@@ -216,14 +232,6 @@ export function adjacentFile(files, target, offset) {
   const at = files.findIndex(file => sameTarget(file, target));
   return at < 0 ? null : files[at + offset] || null;
 }
-export function detailsShouldClose(overlay, selected, target) {
-  return overlay === 'facts' && sameTarget(selected, target);
-}
-
-export function wholeMapTarget(active, selected, neighbourhoodOpen) {
-  return neighbourhoodOpen && selected ? selected : active;
-}
-
 const HISTORY_HIGH_WATER = 'atlas-history-high-water';
 export function historyHighWater(storage, current, reset = false) {
   let high = current;
@@ -235,23 +243,8 @@ export function historyHighWater(storage, current, reset = false) {
   return high;
 }
 
-export function neighbourReadTarget(entries, index, key) {
-  return key === 'Enter' ? entries[Number(index)]?.target || null : null;
-}
-
 export function isTextEntry(target) {
   return !!target?.closest?.('input, textarea, select, [contenteditable="true"]');
-}
-
-export function keyFacts(event, editable) {
-  return {
-    key: event.key,
-    ctrlKey: event.ctrlKey,
-    metaKey: event.metaKey,
-    altKey: event.altKey,
-    isComposing: event.isComposing,
-    editable
-  };
 }
 
 export function shortcutFor(event, view) {
@@ -263,6 +256,7 @@ export function shortcutFor(event, view) {
   if (event.key === '/') return 'search';
   if (event.key === 'o') return 'files';
   if (event.key === 'r') return 'refresh';
+  if (event.key === 'z') return 'toolbar';
   if (view === 'read') return ({m:'map', n:'neighbourhood', d:'details', e:'edit', t:'outline', b:'backlinks', j:'down', k:'up'}[event.key] || null);
   return ({d:'details', e:'edit', m:'map', n:'neighbourhood', j:'next', k:'previous', ArrowDown:'next', ArrowUp:'previous'}[event.key] || null);
 }
@@ -271,11 +265,35 @@ export async function startApp() {
   const $ = id => document.getElementById(id);
   const initialHistoryState = history.state;
   let route = parseRoute(location.href), index = null, selected = route.target;
+  let coldTargetPending = route.view === 'map' && !!route.target && !(initialHistoryState?.map && 'selected' in initialHistoryState.map);
   let map = null, scope = initialHistoryState?.map?.scope || null, mapModule = null, mapLoading = null;
+  let mapIndex = null, mapScope = null;
   let generation = 0, factsGeneration = 0, diagramID = 0, visitIndex = initialHistoryState?.atlasIndex || 0;
   let maxVisitIndex = historyHighWater(sessionStorage, visitIndex, !initialHistoryState?.atlas);
   let diagrams = [], capturedFiles = [], pickerScope = null, overlay = null, overlayOpener = null;
-  let renderQueue = Promise.resolve(), themeQueue = Promise.resolve(), shown = null;
+  let renderQueue = Promise.resolve(), themeQueue = Promise.resolve(), shown = null, indexFailure = null;
+  const libraryLoads = new Map();
+  function loadLibrary(name) {
+    if (!libraryLoads.has(name)) libraryLoads.set(name, new Promise((resolve, reject) => {
+      const script = document.createElement('script'); script.src = `/vendor/${name}.min.js`;
+      script.onload = resolve; script.onerror = () => { libraryLoads.delete(name); script.remove(); reject(Error(`${name} unavailable`)); };
+      document.head.append(script);
+    }));
+    return libraryLoads.get(name);
+  }
+  const toolbarKey = 'atlas-toolbar-hidden';
+  let toolbarHidden = false;
+  try { toolbarHidden = localStorage.getItem(toolbarKey) === 'true'; } catch { /* The toggle still works without storage. */ }
+  function setToolbarHidden(hidden, moveFocus = false) {
+    toolbarHidden = hidden;
+    $('toolbar').hidden = hidden; $('show-toolbar').hidden = !hidden;
+    document.body.classList.toggle('toolbar-hidden', hidden);
+    $('hide-toolbar').setAttribute('aria-expanded', String(!hidden));
+    $('show-toolbar').setAttribute('aria-expanded', String(!hidden));
+    if (moveFocus) (hidden ? $('show-toolbar') : $('hide-toolbar')).focus();
+    try { localStorage.setItem(toolbarKey, String(hidden)); } catch { /* In-memory state remains usable. */ }
+  }
+  setToolbarHidden(toolbarHidden);
   const render = createRenderer(window.markdownit, window.hljs);
   const blankProbe = {zoom:null, pins:[], counts:{nodes:0, edges:0}, cooled:false, settleMs:null};
   window.atlasProbe = {get view() { return route.view; }, get target() { return selected && {...selected}; }, theme() { return probeTheme(getComputedStyle(document.documentElement)); }, get map() { return map?.probe?.() || blankProbe; }};
@@ -300,8 +318,8 @@ export async function startApp() {
   }
   function openOverlay(id, opener) { closeOverlay(false); overlay = id; overlayOpener = opener || document.activeElement; $(id).hidden = false; $(id).focus(); }
   function breadcrumb() {
-    if (route.view === 'map') $('crumb-tail').innerHTML = scope ? ' › Neighbourhood' : ' › Whole map';
-    else if (route.target) $('crumb-tail').innerHTML = ` › <button data-root="${escapeHTML(route.target.root)}">${escapeHTML(route.target.root)}</button> › ${escapeHTML(route.target.path)}`;
+    if (route.view === 'map') $('crumb-tail').innerHTML = scope ? '<span class="crumb-separator">›</span><span aria-current="page">Neighbourhood</span>' : '<span class="crumb-separator">›</span><span aria-current="page">Whole map</span>';
+    else if (route.target) $('crumb-tail').innerHTML = `<span class="crumb-separator">›</span><button data-root="${escapeHTML(route.target.root)}">${escapeHTML(route.target.root)}</button><span class="crumb-separator">›</span><span aria-current="page">${escapeHTML(route.target.path)}</span>`;
     else $('crumb-tail').textContent = '';
   }
   function updateChrome() {
@@ -310,13 +328,20 @@ export async function startApp() {
     $('neighbourhood-button').setAttribute('aria-pressed', String(route.view === 'map' && !!scope));
     $('neighbourhood-button').classList.toggle('active', route.view === 'map' && !!scope);
     $('map-button').classList.toggle('active', route.view === 'map' && !scope);
+    for (const [id, current] of [['map-button', route.view === 'map' && !scope], ['neighbourhood-button', route.view === 'map' && !!scope]]) {
+      if (current) $(id).setAttribute('aria-current', 'page'); else $(id).removeAttribute('aria-current');
+    }
     $('neighbourhood-button').disabled = !route.target;
     const previous = adjacentFile(capturedFiles, route.target, -1), next = adjacentFile(capturedFiles, route.target, 1);
     $('previous-file').disabled = !previous; $('next-file').disabled = !next;
+    $('previous-file').hidden = !previous; $('next-file').hidden = !next;
   }
   function drawDiagrams() {
     const nodes = [...$('document').querySelectorAll('[data-diagram]')], sources = diagrams.slice(), saved = position();
+    if (!nodes.length) return renderQueue;
     renderQueue = renderQueue.catch(() => {}).then(async () => {
+      try { await loadLibrary('mermaid'); }
+      catch (error) { for (const node of nodes) if (node.isConnected) node.textContent = `Diagram unavailable: ${error.message}\n${sources[Number(node.dataset.diagram)]}`; return; }
       const style = getComputedStyle(document.documentElement);
       window.mermaid.initialize(themeOptions(name => style.getPropertyValue(name)));
       for (const node of nodes) {
@@ -329,7 +354,17 @@ export async function startApp() {
     return renderQueue;
   }
   function referenceList(refs, direction) {
-    return refs.map(ref => `<li><span>line ${ref.line}</span> ${direction === 'inbound' ? `<a href="${escapeHTML(routeURL('read', ref.from))}">${escapeHTML(ref.from.root + '/' + ref.from.path)}</a> — ${escapeHTML(ref.text)}` : referenceHTML(ref)}</li>`).join('');
+    return refs.map(ref => `<li><span>line ${ref.line}</span> ${direction === 'inbound' ? `${recencyHTML(fileFor(ref.from))} <a href="${escapeHTML(routeURL('read', ref.from))}">${escapeHTML(ref.from.root + '/' + ref.from.path)}</a> — ${escapeHTML(ref.text)}` : referenceHTML(ref)}</li>`).join('');
+  }
+  function fileFor(target) { return (sameTarget(currentFile, target) ? currentFile : null) || (index?.files || []).find(file => sameTarget(file, target)); }
+  let currentFile = null;
+  function updateRecency() {
+    for (const node of document.querySelectorAll('[data-recency-root]')) {
+      const value = recency(fileFor({root:node.dataset.recencyRoot, path:node.dataset.recencyPath}));
+      if (!value) { node.remove(); continue; }
+      node.dataset.level = value.level; node.setAttribute('aria-label', value.label); node.title = value.label;
+      const label = node.querySelector('.recency-label'); if (label) label.textContent = node.classList.contains('recency-pill') || value.level === 'hot' ? value.label : '';
+    }
   }
   function groupedReferences(refs, direction) {
     const groups = refs.reduce((groups, ref) => groups.set(ref.style, [...(groups.get(ref.style) || []), ref]), new Map());
@@ -341,10 +376,10 @@ export async function startApp() {
   }
   function metadataHTML(data) {
     const f = data.file;
-    return `<p>${escapeHTML(f.kind)} · ${escapeHTML(f.time)} (${escapeHTML(f.timeSource)}) · ${f.inbound} inbound · ${f.outbound} outbound${f.orphan ? ' · orphan' : ''}${f.dangling ? ` · ${f.dangling} dangling` : ''}${f.stale ? ' · stale' : ''}</p>`;
+    return `<p>${escapeHTML(f.kind)} · ${escapeHTML(f.time)} (${escapeHTML(f.timeSource)}) · ${f.inbound} inbound · ${f.outbound} outbound${f.orphan ? ' · orphan' : ''}${f.dangling ? ` · ${f.dangling} dangling` : ''}${f.stale ? ' · stale' : ''}</p>${recencyHTML(f, true)}`;
   }
   function actionRow(view) {
-    return `<div class="actions">${view === 'read' ? '' : '<button data-action="read">Read ↵</button>'}${view === 'map' ? '' : '<button data-action="map">Map m</button>'}<button data-action="edit">Edit e</button><button data-action="details">Details d</button></div>`;
+    return `<div class="actions">${view === 'read' ? '' : '<button data-action="read" aria-keyshortcuts="Enter">Read <span aria-hidden="true">↵</span></button>'}${view === 'map' ? '' : '<button data-action="map" aria-keyshortcuts="m">Map <span aria-hidden="true">m</span></button>'}<button data-action="edit" aria-keyshortcuts="e">Edit <span aria-hidden="true">e</span></button><button data-action="details" aria-keyshortcuts="d">Details <span aria-hidden="true">d</span></button></div>`;
   }
   async function showFacts(target, opener) {
     if (!target) return; selected = target; openOverlay('facts', opener);
@@ -356,7 +391,7 @@ export async function startApp() {
   }
   function toggleFacts(target, opener) {
     if (!target) return;
-    if (detailsShouldClose(overlay, selected, target)) { closeOverlay(); updateChrome(); }
+    if (overlay === 'facts' && sameTarget(selected, target)) { closeOverlay(); updateChrome(); }
     else showFacts(target, opener);
   }
   async function edit(target = selected || route.target) {
@@ -369,7 +404,7 @@ export async function startApp() {
   }
   function renderNeighbours(data) {
     const entries = [...data.references.inbound.map(ref => ({target:ref.from, label:`${ref.from.root}/${ref.from.path}`, detail:`inbound · ${ref.style} · line ${ref.line}`})), ...data.references.outbound.map(ref => ({target:ref.resolved ? ref.to : null, label:ref.resolved ? `${ref.to.root}/${ref.to.path}` : ref.text, detail:`outbound · ${ref.style} · line ${ref.line}${ref.resolved ? '' : ' · missing'}`}))];
-    $('neighbour-list').innerHTML = entries.length ? entries.map((entry, i) => `<div class="neighbour-row" role="option" tabindex="0" data-neighbour="${i}" aria-selected="false"><strong>${escapeHTML(entry.label)}</strong><small>${escapeHTML(entry.detail)}</small>${entry.target ? actionRow('map') : ''}</div>`).join('') : '<p>No direct references.</p>';
+    $('neighbour-list').innerHTML = entries.length ? entries.map((entry, i) => `<div class="neighbour-row" role="option" tabindex="0" data-neighbour="${i}" aria-selected="false">${entry.target ? recencyHTML(fileFor(entry.target)) : ''} <strong>${escapeHTML(entry.label)}</strong><small>${escapeHTML(entry.detail)}</small></div>`).join('') : '<p>No direct references.</p>';
     $('neighbour-list')._entries = entries;
   }
   async function loadRead(saved = null) {
@@ -384,7 +419,7 @@ export async function startApp() {
     }
     try {
       const data = await request(fileURL(target)); if (ticket !== generation) return;
-      shown = target;
+      shown = target; currentFile = data.file;
       sessionStorage.setItem('atlas-last-target', JSON.stringify(target));
       const result = renderFile(data, target, render);
       diagrams = result.diagrams;
@@ -397,7 +432,7 @@ export async function startApp() {
       $('backlinks').innerHTML = '<h2>Backlinks</h2>' + (roots.length ? roots.map(root => `<h3>${escapeHTML(root)}</h3><ul>${referenceList(data.references.inbound.filter(ref => ref.from.root === root), 'inbound')}</ul>`).join('') : '<p>No inbound references.</p>');
       const unavailable = (index?.unavailable || []).filter(item => item.root === target.root && (!item.path || item.path === target.path));
       if (unavailable.length) $('metadata').insertAdjacentHTML('beforeend', `<p>Stale analysis unavailable: ${unavailable.map(item => escapeHTML(item.reason)).join('; ')}</p>`);
-      renderNeighbours(data); message(); restore(saved); await drawDiagrams(); if (ticket === generation) restore(saved);
+      renderNeighbours(data); message(indexFailure ? `${indexFailure} · Retaining index from ${index?.generatedAt || 'last successful refresh'}` : '', !!indexFailure); restore(saved); await drawDiagrams(); if (ticket === generation) restore(saved);
     } catch (error) {
       if (ticket !== generation) return;
       shown = null; $('document-title').textContent = error.status === 404 ? 'File missing' : error.status === 413 ? 'File too large' : 'File unavailable'; $('metadata').innerHTML = `<p>${escapeHTML(target.root + '/' + target.path)}</p>`; $('document').textContent = error.status === 404 ? 'The file could not be found.' : error.status === 413 ? 'This file exceeds the 2 MB reader limit.' : 'The server could not load this file.'; $('backlinks').textContent = ''; message(error.message, true);
@@ -405,20 +440,20 @@ export async function startApp() {
   }
   async function loadMapModule() {
     if (mapModule) return mapModule;
-    if (!mapLoading) mapLoading = import('./map.js').then(module => {
+    if (!mapLoading) mapLoading = loadLibrary('force-graph').then(() => import('./map.js')).then(module => {
       if (!document.querySelector('link[data-map]')) { const css = document.createElement('link'); css.rel = 'stylesheet'; css.href = '/map.css'; css.dataset.map = ''; document.head.append(css); }
       return (mapModule = module);
     });
     return mapLoading;
   }
-  async function showMap(savedView = null) {
+  async function showMap(savedView = null, preferTarget = false) {
     try {
       const module = await loadMapModule();
       if (!map) map = module.createMap($('map-view'), {onSelect:target => { selected = target; selectNeighbour(target); }, onDetails:target => toggleFacts(target, $('map-view')), onRead:target => navigate('read', target), onEdit:edit,
         onViewChange:() => { if (route.view === 'map') saveVisit(); }});
-      if (index) map.setIndex(index);
-      map.setScope(scope);
-      if (savedView && 'selected' in savedView && map.setView) map.setView(savedView); else if (route.target) map.setTarget(route.target);
+      if (index && mapIndex !== index) { map.setIndex(index); mapIndex = index; }
+      if ((scope || mapScope) && !sameTarget(mapScope, scope)) { map.setScope(scope); mapScope = scope; }
+      if (savedView && 'selected' in savedView && !preferTarget && map.setView) map.setView(savedView); else if (route.target) map.setTarget(route.target);
       map.setVisible(route.view === 'map');
     } catch (error) { mapLoading = null; $('map-view').textContent = `Map unavailable: ${error.message}. Read remains available.`; }
   }
@@ -443,7 +478,7 @@ export async function startApp() {
   function renderPicker() {
     const files = matchingFiles(index?.files || [], pickerScope, $('file-search').value);
     $('file-list')._files = files;
-    $('file-list').innerHTML = files.length ? files.map((file, i) => `<button class="file-row" role="option" data-file="${i}">${escapeHTML(file.root + '/' + file.path)}<small>${escapeHTML(file.title)} · ${escapeHTML(file.kind)}</small></button>`).join('') : `<p>${index?.roots.length ? 'No matching files.' : 'No roots registered. Add one with atlas root-add PATH.'}</p>`;
+    $('file-list').innerHTML = files.length ? files.map((file, i) => `<button class="file-row" role="option" data-file="${i}">${recencyHTML(file)} ${escapeHTML(file.root + '/' + file.path)}<small>${escapeHTML(file.title)} · ${escapeHTML(file.kind)}</small></button>`).join('') : `<p>${index?.roots.length ? 'No matching files.' : 'No roots registered. Add one with atlas root-add PATH.'}</p>`;
   }
   function openPicker(scope = null, opener) { pickerScope = scope; $('picker-title').textContent = scope ? `Files · ${scope}` : 'Files'; $('file-search').value = ''; renderPicker(); openOverlay('picker', opener); $('file-search').focus(); updateChrome(); }
   async function display(state = null) {
@@ -469,22 +504,25 @@ export async function startApp() {
   async function refresh() {
     const saved = visitState();
     try {
-      index = await request('/api/index'); map?.setIndex(index);
+      index = await request('/api/index'); indexFailure = null;
+      if (map) { map.setIndex(index); mapIndex = index; }
       if (!route.target && route.view === 'read') {
         let last = null; try { last = JSON.parse(sessionStorage.getItem('atlas-last-target')); } catch { /* fresh session */ }
         if (last && index.files.some(file => sameTarget(file, last))) await navigate('read', last, '', 'replace');
         else { await loadRead(); openPicker(null, $('files-button')); message(index.roots.length ? (index.files.length ? '' : 'Registered roots contain no documents.') : 'No roots registered. Add a root with atlas root-add.'); }
       } else if (route.view === 'read') await loadRead(saved.read.scroll);
-      else { await showMap(saved.map); await loadNeighbours(); }
-    } catch (error) { message(`${error.message}${index ? ` · Retaining index from ${index.generatedAt}` : ''}`, true); }
+      else { await showMap(saved.map, coldTargetPending); if (map) coldTargetPending = false; await loadNeighbours(); }
+    } catch (error) { indexFailure = error.message; message(`${error.message}${index ? ` · Retaining index from ${index.generatedAt}` : ''}`, true); }
     updateChrome();
   }
   history.replaceState(initialHistoryState?.atlas ? initialHistoryState : {atlas:true, atlasIndex:visitIndex, route:{...route}, read:{scroll:null}, map:null}, '', location.href);
   $('back-button').onclick = () => { if (closeOverlay()) updateChrome(); else history.back(); };
   $('forward-button').onclick = () => history.forward();
+  $('hide-toolbar').onclick = () => setToolbarHidden(true, true);
+  $('show-toolbar').onclick = () => setToolbarHidden(false, true);
   $('atlas-button').onclick = event => openPicker(null, event.currentTarget);
   $('files-button').onclick = event => openPicker(null, event.currentTarget);
-  const openWholeMap = () => navigate('map', wholeMapTarget(route.target, selected, !$('neighbourhood').hidden));
+  const openWholeMap = () => navigate('map', !$('neighbourhood').hidden && selected ? selected : route.target);
   $('map-button').onclick = openWholeMap;
   $('neighbourhood-button').onclick = openNeighbourhood;
   $('previous-file').onclick = () => { const file = adjacentFile(capturedFiles, route.target, -1); if (file) navigate('read', file); };
@@ -493,14 +531,14 @@ export async function startApp() {
   $('file-search').oninput = renderPicker;
   $('file-list').onclick = event => { const row = event.target.closest('[data-file]'); if (!row) return; capturedFiles = $('file-list')._files.slice(); navigate('read', capturedFiles[Number(row.dataset.file)]); };
   $('crumb-tail').onclick = event => { const root = event.target.dataset.root; if (root) openPicker(root, event.target); };
-  $('reader-actions').onclick = event => runAction(event.target.dataset.action, route.target, event.target);
-  $('facts').onclick = event => runAction(event.target.dataset.action, selected, event.target);
+  $('reader-actions').onclick = event => { const action = event.target.closest('[data-action]'); if (action) runAction(action.dataset.action, route.target, action); };
+  $('facts').onclick = event => { const action = event.target.closest('[data-action]'); if (action) runAction(action.dataset.action, selected, action); };
   $('neighbourhood').onclick = event => {
     if (event.target.dataset.action === 'close-neighbourhood') return history.back();
     const row = event.target.closest('[data-neighbour]'); if (!row) return;
     const entry = $('neighbour-list')._entries[Number(row.dataset.neighbour)]; selected = entry.target; if (selected) map?.setTarget(selected);
     for (const item of $('neighbour-list').querySelectorAll('[data-neighbour]')) item.setAttribute('aria-selected', String(item === row));
-    if (event.target.dataset.action) runAction(event.target.dataset.action, entry.target, event.target); else if (entry.target) showFacts(entry.target, row);
+    if (entry.target) showFacts(entry.target, row);
   };
   async function runAction(action, target, opener) {
     if (!action) return;
@@ -525,17 +563,24 @@ export async function startApp() {
   };
   document.addEventListener('keydown', event => {
     const nativeControl = event.target.closest('button, a, summary');
+    const pickerRow = overlay === 'picker' ? event.target.closest('[data-file]') : null;
+    if (pickerRow && ['j', 'k', 'ArrowDown', 'ArrowUp'].includes(event.key) && !event.ctrlKey && !event.metaKey && !event.altKey && !event.isComposing) {
+      const rows = [...$('file-list').querySelectorAll('[data-file]')];
+      const next = rows[Math.max(0, Math.min(rows.length - 1, rows.indexOf(pickerRow) + (event.key === 'j' || event.key === 'ArrowDown' ? 1 : -1)))];
+      if (next) { event.preventDefault(); event.stopImmediatePropagation(); next.focus(); }
+      return;
+    }
     const neighbourRow = event.target.closest('[data-neighbour]');
-    const neighbourTarget = neighbourReadTarget($('neighbour-list')._entries || [], neighbourRow?.dataset.neighbour, event.key);
+    const neighbourTarget = event.key === 'Enter' ? ($('neighbour-list')._entries || [])[Number(neighbourRow?.dataset.neighbour)]?.target || null : null;
     if (neighbourTarget && !nativeControl && !event.ctrlKey && !event.metaKey && !event.altKey && !event.isComposing) {
       event.preventDefault(); event.stopImmediatePropagation(); navigate('read', neighbourTarget); return;
     }
     const editable = isTextEntry(event.target);
-    const action = shortcutFor(keyFacts(event, editable), route.view);
+    const action = shortcutFor({key:event.key, ctrlKey:event.ctrlKey, metaKey:event.metaKey, altKey:event.altKey, isComposing:event.isComposing, editable}, route.view);
     if (!action) return;
     if (action === 'escape') {
       if (editable && event.target.value) { event.target.value = ''; event.target.dispatchEvent(new Event('input')); event.preventDefault(); return; }
-      if (closeOverlay()) { event.preventDefault(); updateChrome(); return; }
+      if (closeOverlay()) { event.preventDefault(); event.stopImmediatePropagation(); updateChrome(); return; }
       if (scope) { history.back(); event.preventDefault(); event.stopImmediatePropagation(); return; }
       if (route.view === 'map' && selected) { selected = null; event.preventDefault(); return; }
       (route.view === 'read' ? $('reading') : $('map-view')).focus(); return;
@@ -547,7 +592,7 @@ export async function startApp() {
       if (next) { selected = next; map?.setTarget(next); selectNeighbour(next); }
       return;
     } const files = matchingFiles(index?.files || [], null); const next = adjacentFile(files, selected || route.target, offset) || files[offset > 0 ? 0 : files.length - 1]; if (next) { selected = next; map?.setTarget(next); } };
-    const handlers = {back:() => closeOverlay() || history.back(), activate:() => route.view === 'map' && selected ? navigate('read', selected) : document.activeElement?.click?.(), search:() => overlay === 'picker' ? $('file-search').focus() : route.view === 'read' ? $('search').focus() : map?.focusSearch(), files:() => openPicker(null, $('files-button')), refresh, map:openWholeMap, neighbourhood:openNeighbourhood, details:() => toggleFacts(selected || route.target, document.activeElement), edit:() => edit(selected || route.target), outline:() => ($('toc').querySelector('a') || $('toc')).focus(), backlinks:() => { $('backlinks').focus(); $('backlinks').scrollIntoView(); }, down:() => $('reading').scrollBy(0, 80), up:() => $('reading').scrollBy(0, -80), next:() => moveMap(1), previous:() => moveMap(-1), target:() => route.target && map?.setTarget(route.target)};
+    const handlers = {back:() => closeOverlay() || history.back(), activate:() => route.view === 'map' && selected ? navigate('read', selected) : document.activeElement?.click?.(), search:() => overlay === 'picker' ? $('file-search').focus() : route.view === 'read' ? $('search').focus() : map?.focusSearch(), files:() => openPicker(null, $('files-button')), refresh, toolbar:() => setToolbarHidden(!toolbarHidden), map:openWholeMap, neighbourhood:openNeighbourhood, details:() => toggleFacts(selected || route.target, document.activeElement), edit:() => edit(selected || route.target), outline:() => ($('toc').querySelector('a') || $('toc')).focus(), backlinks:() => { $('backlinks').focus(); $('backlinks').scrollIntoView(); }, down:() => $('reading').scrollBy(0, 80), up:() => $('reading').scrollBy(0, -80), next:() => moveMap(1), previous:() => moveMap(-1), target:() => route.target && map?.setTarget(route.target)};
     if (handlers[action]) { event.preventDefault(); event.stopImmediatePropagation(); handlers[action](); }
   });
   window.addEventListener('popstate', async event => {
@@ -557,11 +602,13 @@ export async function startApp() {
   events.addEventListener('open', refresh);
   events.addEventListener('error', () => message('Server disconnected; reconnecting. Previous results retained.', true));
   events.addEventListener('index', refresh);
+  events.addEventListener('index-error', event => { const failure = JSON.parse(event.data); indexFailure = failure.error; message(`${failure.error} · Retaining index from ${failure.generatedAt || 'last successful refresh'}`, true); });
   events.addEventListener('file', event => { const target = JSON.parse(event.data); if (route.view === 'read' && sameTarget(target, route.target)) loadRead(position()); });
   events.addEventListener('show', event => { const next = JSON.parse(event.data); navigate(next.view, {root:next.root, path:next.path}); });
   function reloadTheme() { themeQueue = themeQueue.catch(() => {}).then(() => replaceTheme(document, async () => { map?.setTheme(); await drawDiagrams(); $('theme-status').textContent = ''; })).catch(error => { $('theme-status').textContent = error.message; $('retry').hidden = false; }); }
   events.addEventListener('theme', reloadTheme);
-  window.addEventListener('pagehide', () => { events.close(); map?.destroy(); }, {once:true});
+  const recencyTimer = setInterval(updateRecency, 30000);
+  window.addEventListener('pagehide', () => { clearInterval(recencyTimer); events.close(); map?.destroy(); }, {once:true});
   await display(history.state); await refresh();
 }
 if (typeof window !== 'undefined') window.addEventListener('DOMContentLoaded', () => startApp().catch(error => { document.getElementById('status').textContent = `Reader unavailable: ${error.message}`; }));

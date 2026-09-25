@@ -121,13 +121,13 @@ async function key(client, keys) {
     activeElement: await client.evaluate(`(() => { const node=document.activeElement; return {tag:node?.tagName?.toLowerCase() || null, ariaLabel:node?.getAttribute('aria-label') || null, placeholder:node?.getAttribute('placeholder') || null}; })()`)
   };
 }
-async function shot(client, file, width = 1600, height = 1000) {
+async function shot(client, file, width = 1600, height = 1000, delay = sleep) {
   const metrics = {width:Number(width), height:Number(height), deviceScaleFactor:1, mobile:false};
   await client.command('Emulation.setDeviceMetricsOverride', metrics);
   try {
     const isMap = await client.evaluate("window.atlasProbe?.view === 'map'");
     if (isMap) await waitForSettle(client);
-    else await sleep(2000);
+    else await delay(2000);
     const capture = await client.command('Page.captureScreenshot', {format:'png', fromSurface:true});
     const bytes = Buffer.from(capture.data, 'base64');
     require('fs').writeFileSync(file, bytes);

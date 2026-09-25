@@ -109,9 +109,40 @@ class ServeTests(unittest.TestCase):
                 event = None
         self.fail(f"did not receive {wanted} event")
 
+    def test_failed_rebuild_exposes_stale_index_and_recovery(self) -> None:
+        status, _headers, body = self.request("GET", "/api/index")
+        self.assertEqual(status, 200)
+        generated = json.loads(body)["generatedAt"]
+        _connection, stream = self.event_client()
+        original = self.config.read_bytes()
+        self.config.write_text("{invalid", encoding="utf-8")
+        self.server.state.refresh_index(force=True)
+        failure = self.next_event(stream, "index-error")
+        self.assertEqual(failure["generatedAt"], generated)
+        self.assertIn("config", failure["error"])
+        status, _headers, body = self.request("GET", "/api/index")
+        self.assertEqual(status, 503)
+        self.assertIn(b"config", body)
+        self.assertEqual(self.server.state.index["generatedAt"], generated)
+        self.config.write_bytes(original)
+        self.server.state.last_index_attempt = 0
+        self.server.state.refresh_index()
+        self.assertEqual(self.next_event(stream, "index"), {})
+        self.assertEqual(self.request("GET", "/api/index")[0], 200)
+
+    def wait_for(self, path: str, predicate):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            reply = self.request("GET", path)
+            if predicate(reply):
+                return reply
+            time.sleep(0.01)
+        self.fail(f"{path} did not reach the expected state")
+
     def test_routes_static_data_etags_and_containment(self) -> None:
         status, headers, body = self.request("GET", "/")
         self.assertEqual((status, headers["content-type"]), (200, "text/html; charset=utf-8"))
+
         self.assertIn(b"fixture reader", body)
         self.assertEqual(self.request("GET", "/vendor/fixture.js")[0], 200)
         self.assertEqual(self.request("GET", "/vendor/nested/fixture.js")[0], 404)
@@ -148,6 +179,74 @@ class ServeTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["file"]["path"], "docs/guide.md")
         self.assertEqual(self.request("GET", "/read/demo/docs/guide-alias.md")[0], 200)
         self.assertEqual(self.request("GET", "/map/demo/docs/escape.md")[0], 403)
+
+    def test_unchanged_refresh_reuses_index_and_requests_do_not_wait_for_rebuild(self) -> None:
+        state = self.server.state
+        original = state.get_index()
+        cache_mtime = self.cache.stat().st_mtime_ns
+        state.last_index_attempt = 0
+        self.assertIs(state.refresh_index(), original)
+        self.assertEqual(self.cache.stat().st_mtime_ns, cache_mtime)
+        (self.root / "docs" / "guide.md").write_text("# Changed\n", encoding="utf-8")
+        entered = threading.Event()
+        release = threading.Event()
+        rebuild = state.store.rebuild
+
+        def delayed_rebuild():
+            entered.set()
+            self.assertTrue(release.wait(3))
+            return rebuild()
+
+        with mock.patch.object(state.store, "rebuild", side_effect=delayed_rebuild):
+            worker = threading.Thread(target=lambda: state.refresh_index(force=True))
+            worker.start()
+            try:
+                self.assertTrue(entered.wait(3))
+                started = time.monotonic()
+                status, _headers, body = self.request("GET", "/api/index")
+                self.assertLess(time.monotonic() - started, 0.5)
+                self.assertEqual((status, json.loads(body)["generatedAt"]), (200, original["generatedAt"]))
+            finally:
+                release.set()
+                worker.join(3)
+            self.assertFalse(worker.is_alive())
+        guide = next(item for item in state.get_index()["files"] if item["path"] == "docs/guide.md")
+        self.assertEqual(guide["title"], "Changed")
+
+    def test_edit_during_rebuild_is_served_after_next_refresh(self) -> None:
+        state = self.server.state
+        state.get_index()
+        guide = self.root / "docs" / "guide.md"
+        guide.write_text("# First edit\n", encoding="utf-8")
+        rebuild = state.store.rebuild
+
+        def edit_after_build():
+            candidate = rebuild()
+            guide.write_text("# Second edit with more content\n", encoding="utf-8")
+            return candidate
+
+        with mock.patch.object(state.store, "rebuild", side_effect=edit_after_build):
+            first = state.refresh_index(force=True)
+        self.assertEqual(next(item["title"] for item in first["files"]
+                              if item["path"] == "docs/guide.md"), "First edit")
+        state.last_index_attempt = 0
+        state.refresh_index()
+        status, _headers, body = self.request("GET", "/api/index")
+        self.assertEqual(status, 200)
+        self.assertEqual(next(item["title"] for item in json.loads(body)["files"]
+                              if item["path"] == "docs/guide.md"), "Second edit with more content")
+
+    def test_rounding_is_read_only_when_theme_or_hypr_config_changes(self) -> None:
+        state = self.server.state
+        with mock.patch.object(state, "_rounding", return_value="5px") as rounding:
+            state.refresh_theme(force=True)
+            state.refresh_theme(force=True)
+            self.assertEqual(rounding.call_count, 1)
+            hypr = self.home / ".config/hypr"
+            hypr.mkdir(parents=True)
+            (hypr / "hyprland.conf").write_text("decoration {}\n", encoding="utf-8")
+            state.refresh_theme(force=True)
+            self.assertEqual(rounding.call_count, 2)
 
     def test_instruction_file_returns_only_its_own_cost_row_from_the_isolated_home(self) -> None:
         # A second agent row in the same root, fed by a global file in the
@@ -187,8 +286,8 @@ class ServeTests(unittest.TestCase):
         atlas_index.write_config(atlas_index.add_root(atlas_index.read_config(self.config), other, "other"), self.config)
         self.assertEqual(self.request("GET", "/api/index")[0], 200)
         shutil.rmtree(other)  # an unmounted drive, for instance
-        time.sleep(0.08)
-        status, _headers, body = self.request("GET", "/api/index")
+        status, _headers, body = self.wait_for(
+            "/api/index", lambda reply: [item["name"] for item in json.loads(reply[2])["roots"]] == ["demo"])
         index = json.loads(body)
         # Restoring the invalid_root refusal for a gone root keeps "other" in this index.
         self.assertEqual((status, [root["name"] for root in index["roots"]]), (200, ["demo"]))
@@ -298,6 +397,32 @@ class ServeTests(unittest.TestCase):
         # The bytes are unchanged: hashing them, as below the cap, sends no file event.
         self.assertEqual(self.next_event(events, "file"), {"root": "demo", "path": "docs/large.md"})
 
+    def test_sse_index_event_tracks_mtime_and_swap_without_body_changes(self) -> None:
+        target = self.root / "docs/guide.md"
+        self.assertEqual(self.request("GET", "/api/index")[0], 200)
+        _connection, events = self.event_client()
+
+        os.utime(target, ns=(1_700_000_123_456_789_000, 1_700_000_123_456_789_000))
+        self.assertEqual(self.next_event(events, "index"), {})
+        indexed = json.loads(self.request("GET", "/api/index")[2])
+        guide = next(item for item in indexed["files"] if item["path"] == "docs/guide.md")
+        self.assertEqual((guide["modified"], guide["open"]), ("2023-11-14T22:15:23.456789000Z", False))
+
+        swaps = self.home / ".local/state/nvim/swap"
+        swaps.mkdir(parents=True)
+        marker = swaps / f"{str(target).replace('/', '%')}.swp"
+        marker.touch()
+        self.assertEqual(self.next_event(events, "index"), {})
+        indexed = json.loads(self.request("GET", "/api/index")[2])
+        guide = next(item for item in indexed["files"] if item["path"] == "docs/guide.md")
+        self.assertTrue(guide["open"])
+
+        marker.unlink()
+        self.assertEqual(self.next_event(events, "index"), {})
+        indexed = json.loads(self.request("GET", "/api/index")[2])
+        guide = next(item for item in indexed["files"] if item["path"] == "docs/guide.md")
+        self.assertFalse(guide["open"])
+
     def test_every_response_forbids_framing_and_sniffing(self) -> None:
         _status, headers, _body = self.request("GET", "/api/file?root=demo&path=docs/guide.md")
         paths = [("GET", "/", {}), ("GET", "/read/demo/docs/guide.md", {}), ("GET", "/app.js", {}),
@@ -366,6 +491,11 @@ class ServeTests(unittest.TestCase):
         self.git("init")
         self.git("add", ".")
         self.git("-c", "user.name=Atlas", "-c", "user.email=atlas@example.test", "commit", "-m", "fixture")
+        # Drain the refresh caused by switching this root to git timestamps.
+        # Otherwise it can coalesce with the body rewrite below and produce an
+        # index event instead of the file event this assertion is about.
+        self.assertEqual(self.next_event(first, "index"), {})
+        self.assertEqual(self.next_event(second, "index"), {})
         (self.root / "docs" / "guide.md").write_text("# Guide\n\nChanged body.\n", encoding="utf-8")
         first_file = self.next_event(first, "file")
         second_file = self.next_event(second, "file")
@@ -387,7 +517,7 @@ class ServeTests(unittest.TestCase):
         self.assertIn(b"--background: #eff1f5", light_css)
         self.assertIn(b"--orange: #d84e2b", light_css)
         (self.theme / "colors.toml").write_text("not valid = [", encoding="utf-8")
-        time.sleep(0.08)
+        self.wait_for("/theme.css", lambda reply: self.server.state.theme_error is not None)
         self.assertEqual(self.request("GET", "/theme.css")[2], light_css)
         self.assertIsNotNone(self.server.state.theme_error)
 
@@ -468,6 +598,70 @@ class ServeTests(unittest.TestCase):
         self.assertEqual(self.server.state.client_count(), 0)
         status, _headers, body = self.request("POST", "/api/show", {"root": "demo", "path": "docs/guide.md", "view": "read"})
         self.assertEqual((status, json.loads(body)), (200, {"clients": 0}))
+
+    def test_overflowed_sse_stream_closes_and_replacement_receives_events(self) -> None:
+        state = self.server.state
+        state.get_index()
+        _connection, stream = self.event_client()
+        client = next(iter(state.clients))
+        entered = threading.Event()
+        release = threading.Event()
+        original_get = client.get
+
+        def pause_get(*args, **kwargs):
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("SSE test reader did not resume")
+            return original_get(*args, **kwargs)
+
+        try:
+            with mock.patch.object(client, "get", side_effect=pause_get):
+                self.assertTrue(entered.wait(3))
+                for number in range(client.maxsize - client.qsize()):
+                    client.put_nowait(("file", {"root": "demo", "path": f"{number}.md"}, None))
+                state._broadcast("file", {"root": "demo", "path": "overflow.md"})
+                self.assertEqual(state.client_count(), 0)
+                release.set()
+                for _ in range(100):
+                    if not stream.fp.readline():
+                        break  # Drain events already written before the queue overflow.
+                else:
+                    self.fail("an evicted stream kept sending events instead of reaching EOF")
+        finally:
+            release.set()
+
+        _replacement_connection, replacement = self.event_client()
+        state._broadcast("file", {"root": "demo", "path": "after.md"})
+        self.assertEqual(self.next_event(replacement, "file"), {"root": "demo", "path": "after.md"})
+
+    def test_sixty_file_refresh_emits_one_index_event(self) -> None:
+        state = self.server.state
+        state.get_index()
+        _connection, stream = self.event_client()
+        client = next(iter(state.clients))
+        entered = threading.Event()
+        release = threading.Event()
+        original_get = client.get
+
+        def pause_get(*args, **kwargs):
+            entered.set()
+            if not release.wait(3):
+                raise RuntimeError("SSE test reader did not resume")
+            return original_get(*args, **kwargs)
+
+        try:
+            with mock.patch.object(client, "get", side_effect=pause_get):
+                self.assertTrue(entered.wait(3))
+                for number in range(60):
+                    (self.root / "docs" / f"burst-{number:02}.md").write_text("# Burst\n", encoding="utf-8")
+                state.refresh_index(force=True)
+                self.assertEqual(state.client_count(), 1, "a burst must keep the reader connected")
+                queued = [event for event, _data, _delivery in list(client.queue)]
+                self.assertEqual(queued.count("index"), 1, "a burst queues one index event")
+                self.assertNotIn("file", queued, "a burst must not queue per-file events")
+        finally:
+            release.set()
+        self.assertEqual(self.next_event(stream, "index"), {})
 
     def git(self, *args: str) -> None:
         environment = os.environ.copy()

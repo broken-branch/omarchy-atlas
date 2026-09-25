@@ -63,12 +63,12 @@ Column {
         onClicked: atlas.goBack()
     }
     Row {
-        visible: atlas.refreshError !== ""
+        visible: atlas.refreshError !== "" || atlas.searchError !== "" || atlas.costError !== ""
         width: parent.width
         spacing: Style.space(6)
         Text {
             width: parent.width - retryButton.width - parent.spacing
-            text: "Refresh failed: " + atlas.refreshError
+            text: atlas.refreshError ? "Refresh failed: " + atlas.refreshError : atlas.searchError ? "Search failed: " + atlas.searchError : "Cost failed: " + atlas.costError
             textFormat: Text.PlainText
             color: Color.urgent
             font.family: Style.font.family
@@ -79,7 +79,7 @@ Column {
             id: retryButton
             atlas: view.atlas
             text: "Retry r"
-            onClicked: atlas.refreshIndex()
+            onClicked: atlas.retryFailure(IndexModel.failureCommand(atlas.refreshError, atlas.searchError, atlas.costError))
         }
     }
     AtlasActionButton {
@@ -144,6 +144,13 @@ Column {
             label: "Stale files"
             value: atlas.counts.stale + " files"
             onClicked: atlas.openFinding(2)
+        }
+        PanelFindingRow {
+            atlas: view.atlas
+            position: 3
+            label: "Recently edited"
+            value: atlas.recencyCounts.recent + " files"
+            onClicked: atlas.openFinding(3)
         }
         Text {
             visible: atlas.unavailableLabels.length > 0

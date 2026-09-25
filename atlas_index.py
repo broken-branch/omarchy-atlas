@@ -23,11 +23,12 @@ import subprocess
 import tempfile
 import time
 from typing import Any, Iterable, Mapping
+from urllib.parse import unquote
 
 
 VERSION = 1
 MAX_FILE_BYTES = 2 * 1024 * 1024
-MAX_IMPACT_REFERENCES = 100_000
+MAX_IMPACT_MATCHES = 100_000
 # A saved index older than this is rebuilt before it is read, by the CLI and the server alike.
 REFRESH_SECONDS = 2.0
 DOCUMENT_SUFFIXES = {".md", ".mmd", ".mermaid"}
@@ -341,7 +342,8 @@ def set_kind(config: Mapping[str, Any], identifier: str, *, label: str | None = 
     if colour is not None:
         current["colour"] = colour
     if paths is not None or extensions is not None:
-        current["match"] = {**({"paths": paths} if paths is not None else {}),
+        current["match"] = {**current.get("match", {}),
+                            **({"paths": paths} if paths is not None else {}),
                             **({"extensions": extensions} if extensions is not None else {})}
     current = _kind_entry(current, config=True)
     known_builtin = identifier in {item[0] for item in BUILTIN_KINDS}
@@ -461,10 +463,10 @@ def _git(root: Path, *arguments: str) -> list[str]:
             "-C", str(root), *arguments]
 
 
-def _git_paths(root: Path) -> list[str]:
+def _git_paths(root: Path, *, tracked_only: bool = False) -> list[str]:
     try:
         result = subprocess.run(
-            _git(root, "ls-files", "--cached", "--others", "--exclude-standard", "-z"),
+            _git(root, "ls-files", "--cached", *([] if tracked_only else ["--others", "--exclude-standard"]), "-z"),
             check=False, capture_output=True, timeout=10,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -572,36 +574,98 @@ def _discover(root: Path, kinds: Iterable[Mapping[str, Any]]) -> tuple[list[str]
     return sorted(set(paths)), git, broken
 
 
-def _git_time(root: Path, relative: str) -> int | None:
+def _git_times(root: Path, paths: set[str]) -> tuple[dict[str, int], bool]:
+    """Read commit times; report an unusable HEAD separately from an unborn one."""
+    if not paths:
+        return {}, False
     try:
         result = subprocess.run(
-            _git(root, "log", "-1", "--no-show-signature", "--no-ext-diff", "--no-textconv",
-                 "--format=%ct", "--", relative),
-            check=False, capture_output=True, timeout=10,
+            _git(root, "log", "--no-show-signature", "--no-ext-diff", "--no-textconv",
+                 "--no-renames", "--root", "--format=%x00%ct%x00", "--name-only", "-z"),
+            check=False, capture_output=True, timeout=30,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise IndexError("git_error", f"cannot read git timestamp: {exc}") from exc
     if result.returncode:
+        try:
+            head = subprocess.run(_git(root, "rev-parse", "--verify", "--quiet", "HEAD"),
+                                  check=False, capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise IndexError("git_error", f"cannot read git HEAD: {exc}") from exc
+        if head.returncode:
+            try:
+                branch = subprocess.run(_git(root, "symbolic-ref", "--quiet", "--no-recurse", "HEAD"),
+                                        check=False, capture_output=True, timeout=10)
+                ref = subprocess.run(_git(root, "show-ref", "--exists", branch.stdout.decode().strip()),
+                                     check=False, capture_output=True, timeout=10) if branch.returncode == 0 else None
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise IndexError("git_error", f"cannot read git branch: {exc}") from exc
+            if ref is not None:
+                return {}, ref.returncode != 2
         message = result.stderr.decode("utf-8", "replace").strip() or "git log failed"
         raise IndexError("git_error", message)
-    output = result.stdout.decode("ascii", "replace").strip()
-    return int(output) if output.isdigit() else None
+    tokens = result.stdout.split(b"\0")
+    times: dict[str, int] = {}
+    position = 0
+    while position + 2 < len(tokens):
+        stamp = tokens[position + 1]
+        if tokens[position] != b"" or not stamp or not stamp.lstrip(b"-").isdigit():
+            break
+        committed = int(stamp)
+        position += 3  # marker, timestamp, separator before names
+        first = True
+        while position < len(tokens) and tokens[position]:
+            raw = tokens[position].removeprefix(b"\n") if first else tokens[position]
+            path = raw.decode("utf-8", "surrogateescape")
+            first = False
+            if path in paths and path not in times:
+                times[path] = committed
+                if len(times) == len(paths):
+                    return times, False
+            position += 1
+    return times, False
 
 
 def _iso(seconds: float | int) -> str:
-    return _datetime.datetime.fromtimestamp(seconds, _datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    valid = min(max(seconds, 0), 253402300799)
+    return _datetime.datetime.fromtimestamp(valid, _datetime.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def _metadata(root: Path, relative: str, git: bool) -> dict[str, Any]:
+def _iso_ns(nanoseconds: int) -> str:
+    seconds, fraction = divmod(min(max(nanoseconds, 0), 253402300799999999999), 1_000_000_000)
+    return _iso(seconds).replace("Z", f".{fraction:09d}Z" if fraction else "Z")
+
+
+def _metadata(root: Path, relative: str, git_times: Mapping[str, int]) -> dict[str, Any]:
     path = root / relative
-    committed = _git_time(root, relative) if git else None
-    if committed is not None:
-        return {"time": _iso(committed), "timeSource": "git", "epoch": committed}
+    committed = git_times.get(relative)
     try:
-        modified = path.stat().st_mtime
+        status = path.stat()
     except OSError as exc:
         raise IndexError("invalid_root", f"cannot stat {path}: {exc}") from exc
-    return {"time": _iso(modified), "timeSource": "mtime", "epoch": modified}
+    epoch = committed if committed is not None else status.st_mtime
+    return {"time": _iso(epoch), "timeSource": "git" if committed is not None else "mtime",
+            "epoch": min(max(epoch, 0), 253402300799), "modified": _iso_ns(status.st_mtime_ns),
+            "timestampOutOfRange": (epoch < 0 or epoch > 253402300799
+                                    or status.st_mtime_ns < 0 or status.st_mtime_ns > 253402300799999999999)}
+
+
+def _nvim_swaps() -> set[str]:
+    swap_dir = Path(os.environ.get("HOME", str(Path.home()))) / ".local/state/nvim/swap"
+    try:
+        return {entry.name.rsplit(".", 1)[0] for entry in swap_dir.iterdir()
+                if re.fullmatch(r"sw[a-p]", entry.name.rsplit(".", 1)[-1])}
+    except OSError:
+        return set()
+
+
+def _editor_open(path: Path, swaps: set[str], tracked: set[str], root: Path) -> bool:
+    name = path.name
+    swap = path.parent / f".{name}.swp"
+    lock = path.parent / f".#{name}"
+    return (str(path).replace("/", "%") in swaps
+            or (swap.relative_to(root).as_posix() not in tracked and swap.is_file())
+            or (lock.relative_to(root).as_posix() not in tracked and os.path.lexists(lock)))
 
 
 def _line_count(text: str) -> int:
@@ -660,7 +724,7 @@ def _document_target(token: str) -> str | None:
     target = token.strip()
     if target.startswith("<") and target.endswith(">"):
         target = target[1:-1]
-    target = target.split("#", 1)[0]
+    target = unquote(target.split("#", 1)[0], encoding="utf-8", errors="surrogateescape")
     if not target or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", target) or target.startswith("//"):
         return None
     return target if Path(target).suffix else None
@@ -808,6 +872,16 @@ def _extract_text_references(root_name: str, root: Path, source: dict[str, Any],
                     local = _resolve_relative(root, "", token, documents, physical_paths)
                 if local is not None:
                     resolved = (root_name, local)
+                else:
+                    candidate = Path(os.path.normpath(root / Path(source["path"]).parent / token))
+                    for other_name, other_root in all_roots:
+                        if other_name == root_name:
+                            continue
+                        rel = _document_identity(other_root, candidate, documents_by_root[other_name],
+                                                 physical_by_root.get(other_name) if physical_by_root else None)
+                        if rel is not None:
+                            resolved = (other_name, rel)
+                            break
             if resolved is not None:
                 target_root, target_path = resolved
                 references.append({
@@ -821,12 +895,10 @@ def _extract_text_references(root_name: str, root: Path, source: dict[str, Any],
 
 
 def _glob_paths(paths: Iterable[str], pattern: str) -> list[str]:
-    # fnmatch's ** is portable enough for the contract's root-relative globs.
-    return sorted(path for path in paths if fnmatch.fnmatchcase(path, pattern))
+    return sorted(path for path in paths if _glob_matches(path, pattern))
 
 
-def _impact(root_name: str, root: Path, all_paths: list[str], documents: dict[str, dict[str, Any]],
-            metadata: dict[str, dict[str, Any]]) -> tuple[str, list[dict[str, Any]], dict[str, list[tuple[int, list[str]]]], list[dict[str, str]]]:
+def _impact(root_name: str, root: Path, all_paths: list[str], documents: dict[str, dict[str, Any]]) -> tuple[str, list[dict[str, Any]], dict[str, list[tuple[int, list[str]]]], list[dict[str, str]]]:
     impact_file = root / "docs" / "impact.yml"
     if not impact_file.exists():
         return "absent", [], {}, [{"root": root_name, "reason": "impact map absent"}]
@@ -863,16 +935,17 @@ def _impact(root_name: str, root: Path, all_paths: list[str], documents: dict[st
         return sorted({path for pattern in patterns for path in globbed[(docs, pattern)]})
 
     targets_by_rule: list[list[str]] = []
+    sources_by_rule: list[list[str]] = []
     total = 0
     for rule in rules:
         targets_by_rule.append(matches(rule["docs"], True))
-        total += len(targets_by_rule[-1])
-        if total > MAX_IMPACT_REFERENCES:
-            return unreadable(f"impact map exceeds {MAX_IMPACT_REFERENCES} references")
+        sources_by_rule.append(matches(rule["source"], False))
+        total += len(targets_by_rule[-1]) + len(sources_by_rule[-1])
+        if total > MAX_IMPACT_MATCHES:
+            return unreadable(f"impact map exceeds {MAX_IMPACT_MATCHES} matched paths")
     references: list[dict[str, Any]] = []
     source_rules: dict[str, list[tuple[int, list[str]]]] = {}
-    for number, (rule, target_paths) in enumerate(zip(rules, targets_by_rule), start=1):
-        source_paths = matches(rule["source"], False)
+    for number, (target_paths, source_paths) in enumerate(zip(targets_by_rule, sources_by_rule), start=1):
         for target in target_paths:
             source_rules.setdefault(target, []).append((number, source_paths))
             references.append({
@@ -910,15 +983,18 @@ def build_index(roots: Iterable[Mapping[str, str]], *, kinds: Iterable[Mapping[s
         root_items.append((name, canonical))
         seen_paths.add(canonical)
     kind_table = effective_kinds(kinds)
+    nvim_swaps = _nvim_swaps()
     all_documents: dict[tuple[str, str], dict[str, Any]] = {}
     root_data: list[dict[str, Any]] = []
-    per_root: dict[str, tuple[Path, list[str], bool, dict[str, dict[str, Any]], dict[str, dict[str, Any]]]] = {}
+    per_root: dict[str, tuple[Path, list[str], bool, dict[str, dict[str, Any]],
+                              dict[str, dict[str, Any]], dict[str, int]]] = {}
     extensions = {extension for kind in kind_table for extension in kind["match"].get("extensions", [])}
     extensions |= {Path(pattern.rsplit("/", 1)[-1]).suffix.lower() for kind in kind_table
                    for pattern in kind["match"].get("paths", []) if _names_file(pattern)}
     unrestricted_extension = any(not kind["match"].get("extensions") for kind in kind_table)
     for name, root in root_items:
         all_paths, git, broken = _discover(root, kind_table)
+        tracked = set(_git_paths(root, tracked_only=True)) if git else set()
         unavailable.extend({"root": name, "path": path, "reason": GIT_UNAVAILABLE} for path in broken)
         metadata: dict[str, dict[str, Any]] = {}
         documents: dict[str, dict[str, Any]] = {}
@@ -927,6 +1003,9 @@ def build_index(roots: Iterable[Mapping[str, str]], *, kinds: Iterable[Mapping[s
         # file; instruction aliases remain intentional entry points.
         document_candidates = (all_paths if unrestricted_extension else
                                [path for path in all_paths if Path(path).suffix.lower() in extensions])
+        git_times, broken_head = _git_times(root, set(all_paths)) if git else ({}, False)
+        if broken_head:
+            unavailable.append({"root": name, "reason": GIT_UNAVAILABLE})
         for path in sorted(document_candidates, key=lambda item: ((root / item).is_symlink(), item)):
             kind = _kind(path, kind_table)
             if kind is None:
@@ -948,16 +1027,19 @@ def build_index(roots: Iterable[Mapping[str, str]], *, kinds: Iterable[Mapping[s
                         size = len(raw)
             except OSError as exc:
                 raise IndexError("backend_error", f"cannot read document: {candidate}: {exc}") from exc
-            metadata[path] = _metadata(root, path, git)
+            metadata[path] = _metadata(root, path, git_times)
+            if metadata[path]["timestampOutOfRange"]:
+                unavailable.append({"root": name, "path": path, "reason": "timestamp outside supported range"})
             content = raw.decode("utf-8", "replace")
             title = _title(content, Path(path).name) if Path(path).suffix.lower() in DOCUMENT_SUFFIXES else Path(path).name
             documents[path] = {"root": name, "path": path, "kind": kind,
                                "type": Path(path).suffix.lower(), "title": title,
                                "bytes": size, "lines": _line_count(content), "time": metadata[path]["time"],
-                               "timeSource": metadata[path]["timeSource"], "content": content}
-        per_root[name] = (root, all_paths, git, documents, metadata)
+                               "timeSource": metadata[path]["timeSource"], "modified": metadata[path]["modified"],
+                               "open": _editor_open(candidate, nvim_swaps, tracked, root), "content": content}
+        per_root[name] = (root, all_paths, git, documents, metadata, git_times)
     references: list[dict[str, Any]] = []
-    impact_rules: dict[tuple[str, str], list[tuple[int, list[str]]]] = {}
+    impact_rules: dict[tuple[str, str], list[tuple[int, str | None, dict[str, Any] | None, bool]]] = {}
     documents_by_root = {name: data[3] for name, data in per_root.items()}
     physical_by_root: dict[str, dict[Path, str]] = {}
     basename_by_root: dict[str, dict[str, list[str]]] = {}
@@ -972,19 +1054,31 @@ def build_index(roots: Iterable[Mapping[str, str]], *, kinds: Iterable[Mapping[s
             basename_by_root[name].setdefault(relative.name, []).append(path)
             local_by_root[name].setdefault(str(relative.parent), set()).add(relative.name)
     for name, root in root_items:
-        actual_root, all_paths, git, documents, metadata = per_root[name]
+        actual_root, all_paths, git, documents, metadata, git_times = per_root[name]
         references.extend(reference for document in documents.values()
                           if document["type"] in DOCUMENT_SUFFIXES
                           for reference in _extract_text_references(name, actual_root, document, documents, root_items,
                                                                     documents_by_root, physical_by_root,
                                                                     basename_by_root[name], local_by_root[name]))
-        impact_state, impact_refs, rules, impact_unavailable = _impact(name, actual_root, all_paths, documents, metadata)
+        impact_state, impact_refs, rules, impact_unavailable = _impact(name, actual_root, all_paths, documents)
         for source in {path for entries in rules.values() for _number, paths in entries for path in paths}:
             if source not in metadata:
-                metadata[source] = _metadata(actual_root, source, git)
+                metadata[source] = _metadata(actual_root, source, git_times)
+                if metadata[source]["timestampOutOfRange"]:
+                    unavailable.append({"root": name, "path": source, "reason": "timestamp outside supported range"})
+        rule_values: dict[int, tuple[int, str | None, dict[str, Any] | None, bool]] = {}
+        for entries in rules.values():
+            for number, sources in entries:
+                if number not in rule_values:
+                    usable = [(path, metadata[path]) for path in sources if path in metadata]
+                    newest_path, newest = (max(usable, key=lambda item: item[1]["epoch"])
+                                           if usable else (None, None))
+                    mixed = (bool(usable) and len({value["timeSource"] for _, value in usable}) > 1)
+                    rule_values[number] = (number, newest_path, newest, mixed)
         references.extend(impact_refs)
         unavailable.extend(impact_unavailable)
-        impact_rules.update({(name, path): rule for path, rule in rules.items()})
+        impact_rules.update({(name, path): [rule_values[number] for number, _ in entries]
+                             for path, entries in rules.items()})
         root_data.append({"name": name, "path": str(root), "git": git, "impact": impact_state})
         all_documents.update({(name, path): document for path, document in documents.items()})
     references = _sort_references(references)
@@ -1004,24 +1098,21 @@ def build_index(roots: Iterable[Mapping[str, str]], *, kinds: Iterable[Mapping[s
     files: list[dict[str, Any]] = []
     for key in sorted(all_documents):
         document = all_documents[key]
-        root, all_paths, _git, _documents, metadata = per_root[key[0]]
         stale: dict[str, Any] | None = None
-        for number, sources in impact_rules.get(key, []):
-            source_values = [metadata[path] for path in sources if path in metadata]
-            if not source_values:
+        for number, newest_path, newest, mixed in impact_rules.get(key, []):
+            if newest is None:
                 unavailable.append({"root": key[0], "path": key[1], "reason": "no usable source timestamp"})
                 continue
-            if any(value["timeSource"] != document["timeSource"] for value in source_values):
+            if mixed or newest["timeSource"] != document["timeSource"]:
                 unavailable.append({"root": key[0], "path": key[1], "reason": "mixed time sources"})
                 continue
-            newest_path, newest = max(((path, metadata[path]) for path in sources), key=lambda item: item[1]["epoch"])
             if newest["epoch"] > _datetime.datetime.fromisoformat(document["time"].replace("Z", "+00:00")).timestamp():
                 candidate = {"root": key[0], "path": key[1], "time": document["time"],
                              "newestSource": {"path": newest_path, "time": newest["time"]},
                              "rule": f"impact.yml#{number}"}
                 if stale is None or candidate["newestSource"]["time"] > stale["newestSource"]["time"]:
                     stale = candidate
-        file_value = {field: document[field] for field in ("root", "path", "kind", "type", "title", "bytes", "lines", "time", "timeSource")}
+        file_value = {field: document[field] for field in ("root", "path", "kind", "type", "title", "bytes", "lines", "time", "timeSource", "modified", "open")}
         file_value.update({"inbound": inbound[key], "outbound": outbound[key],
                            "orphan": inbound[key] == 0 and document["kind"] not in EXEMPT_KINDS,
                            "dangling": dangling[key], "stale": stale})
@@ -1105,6 +1196,14 @@ def filter_index(index: Mapping[str, Any], root: str | None = None) -> dict[str,
                         "stale": sum(item.get("stale") is not None for item in files)}}
 
 
+def _stat_signature(path: Path, *, follow: bool = True) -> tuple[int, int] | None:
+    try:
+        status = path.stat() if follow else path.lstat()
+        return status.st_mtime_ns, status.st_size
+    except OSError:
+        return None
+
+
 class IndexStore:
     """Registered-root state facade; no CLI or HTTP behaviour."""
 
@@ -1124,6 +1223,41 @@ class IndexStore:
         index = build_index(config["roots"], kinds=config.get("kinds", []))
         write_cache(index, self.cache_path)
         return index
+
+    def signature(self) -> tuple[Any, ...]:
+        """Cheap inputs that can change discovery, facts, or open state."""
+        config = self.config()
+        kinds = effective_kinds(config.get("kinds", []))
+        items: list[Any] = [json.dumps(config, sort_keys=True), tuple(sorted(_nvim_swaps()))]
+        for entry in config["roots"]:
+            root = Path(entry["path"])
+            if not root.is_dir():
+                items.append((entry["name"], "missing"))
+                continue
+            paths, git, broken = _discover(root, kinds)
+            items.append((entry["name"], str(root), git, tuple(broken)))
+            if git:
+                try:
+                    result = subprocess.run(_git(root, "rev-parse", "--git-path", "index", "HEAD"),
+                                            check=False, capture_output=True, timeout=10)
+                except (OSError, subprocess.TimeoutExpired) as exc:
+                    raise IndexError("git_error", f"cannot read git state: {exc}") from exc
+                values = result.stdout.decode("utf-8", "surrogateescape").splitlines()
+                index_path = Path(values[0]) if values else root / ".git/index"
+                if not index_path.is_absolute():
+                    index_path = root / index_path
+                items.append((result.returncode, values[1:] if len(values) > 1 else [],
+                              _stat_signature(index_path)))
+            for relative in paths:
+                candidate = root / relative
+                items.append((relative, _stat_signature(candidate, follow=False),
+                              _stat_signature(candidate)))
+            items.append(("docs/impact.yml", _stat_signature(root / "docs/impact.yml")))
+            for relative in paths:
+                candidate = root / relative
+                items.append((relative, _stat_signature(candidate.parent / f".{candidate.name}.swp"),
+                              _stat_signature(candidate.parent / f".#{candidate.name}", follow=False)))
+        return tuple(items)
 
     def cached_or_rebuild(self, diagnostics: list[str] | None = None) -> dict[str, Any]:
         """Return the full cache, rebuilding all roots when it is absent, corrupt,

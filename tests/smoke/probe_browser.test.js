@@ -66,7 +66,9 @@ test('shot captures PNG bytes and restores device metrics', async () => {
     return {};
   }, async evaluate(expression) { return expression.includes('atlasProbe?.view') ? false : undefined; }};
   try {
-    const result = await shot(client, file, 800, 600);
+    const delays = [];
+    const result = await shot(client, file, 800, 600, async ms => { delays.push(ms); });
+    assert.deepEqual(delays, [2000]);
     assert.deepEqual(result, {file, width:800, height:600, bytes:8});
     assert.equal(fs.readFileSync(file, 'utf8'), 'png-data');
     assert.deepEqual(events.map(([method]) => method), ['Emulation.setDeviceMetricsOverride','Page.captureScreenshot','Emulation.clearDeviceMetricsOverride']);

@@ -26,6 +26,8 @@ HTTP route changes.
   contract. A reference style the indexer cannot see is a documented
   limitation, not a hidden heuristic. Report unavailable, stale and failed
   inputs distinctly; never invent results, times or links.
+- Keep public descriptions of recency, filters, reader links and agent
+  startup cost aligned with the [contract](docs/contract.md#definitions).
 - The server binds `127.0.0.1` only and serves only files inside registered
   roots. It has no authentication because it has no remote users; do not add
   any.
@@ -70,6 +72,14 @@ docs/                user and reference documentation
 ```
 
 ## Checks
+
+Run `sh scripts/demo-workspace OUT-DIR` to create four fictional projects for screenshots and local trials.
+Use an empty output directory; `--git` gives each project one commit.
+
+On an Omarchy desktop, run `sh scripts/theme-shots OUT-DIR ROOT-DIR [ROOT-DIR ...] [--size WxH] [--scale N] [--read ROOT/REL] [-- THEME ...]` to capture the whole map, a reader page, and the neighbourhood of the most-referenced file for each theme. The reader defaults to the first root's `README.md` (or its first Markdown file). Omit themes to use all installed system and user themes. `summary.json` records the files, dimensions, scale, roots, and colour match; a montage is also written when ImageMagick is installed.
+The command registers every root in isolated temporary HOME and XDG directories, then stops its own server and Chromium processes.
+Run `scripts/preview OUT.png [--theme NAME] [--size WxH] [--scale N]` on an Omarchy desktop for the marketplace map image (default: tokyo-night, 1600×900 at scale 2).
+It builds four fictional roots in isolated HOME/XDG state and stops its server and Chromium when the capture finishes.
 
 ```sh
 sh scripts/check

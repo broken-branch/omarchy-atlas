@@ -26,7 +26,9 @@ Column {
             delegate: PanelFileRow {
                 atlas: view.atlas
                 required property var modelData
+                required property int index
                 file: modelData.file
+                searchRowIndex: index
                 caption: (modelData.line > 0 ? "Line " + modelData.line + " · " : "") + modelData.text
             }
         }
@@ -110,6 +112,13 @@ Column {
             text: "Stale files"
             selected: atlas.findings.stale === true
             onClicked: atlas.toggleFinding("stale")
+        }
+        AtlasActionButton {
+            atlas: view.atlas
+            width: parent.width
+            text: "Recently edited"
+            selected: atlas.findings.recent === true
+            onClicked: atlas.toggleFinding("recent")
         }
     }
     Column {
@@ -209,11 +218,6 @@ Column {
                 text: "Edit e"
                 onClicked: atlas.editSelected()
             }
-            AtlasActionButton {
-                atlas: view.atlas
-                text: "Details d"
-                onClicked: atlas.page = "details"
-            }
         }
         AtlasActionButton {
             atlas: view.atlas
@@ -256,6 +260,27 @@ Column {
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
             wrapMode: Text.WordWrap
+        }
+        Row {
+            id: modificationRow
+            width: parent.width
+            spacing: Style.space(6)
+            readonly property string state: atlas.selectedFacts ? IndexModel.recency(atlas.selectedFacts.file, atlas.recencyNow) : ""
+            readonly property color recencyColour: state === "red" ? atlas.recencyRed : state === "orange" ? atlas.recencyOrange : Color.muted
+            Text {
+                text: atlas.selectedFacts ? atlas.selectedFacts.file.modified : ""
+                textFormat: Text.PlainText
+                color: modificationRow.recencyColour
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+            }
+            Text {
+                text: atlas.selectedFacts ? IndexModel.relativeTime(atlas.selectedFacts.file, atlas.recencyNow) : ""
+                textFormat: Text.PlainText
+                color: modificationRow.recencyColour
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+            }
         }
         Row {
             spacing: Style.space(6)

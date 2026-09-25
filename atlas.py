@@ -236,9 +236,11 @@ def dispatch(args: argparse.Namespace) -> Any:
         config = store.config()
         return {"kinds": atlas_index.effective_kinds(config.get("kinds", []))}
     if command == "kind-set":
+        paths = [] if args.paths == [""] else args.paths
+        extensions = [] if args.extensions == [""] else args.extensions
         config = atlas_index.set_kind(store.config(), args.id, label=args.label,
-                                      colour=args.colour, paths=args.paths,
-                                      extensions=args.extensions)
+                                      colour=args.colour, paths=paths,
+                                      extensions=extensions)
         return {"config": store.save_config(config)}
     if command == "kind-remove":
         config = atlas_index.remove_kind(store.config(), args.id)

@@ -17,6 +17,7 @@ import re
 import subprocess
 import threading
 import time
+import tomllib
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Mapping, Sequence
@@ -24,12 +25,6 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import atlas_index
 import atlas_analyze
-
-try:  # Python 3.11+, which is part of Atlas's standard-library baseline.
-    import tomllib
-except ModuleNotFoundError:  # pragma: no cover - makes failure explicit on old Python.
-    tomllib = None  # type: ignore[assignment]
-
 
 INDEX_INTERVAL = atlas_index.REFRESH_SECONDS
 DELIVERY_TIMEOUT = 0.5
@@ -156,8 +151,6 @@ def _safe_css(value: str) -> bool:
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
-    if tomllib is None:
-        raise ValueError("Python 3.11 tomllib is required")
     with path.open("rb") as source:
         decoded = tomllib.load(source)
     if not isinstance(decoded, Mapping):
@@ -244,6 +237,14 @@ def _control_color(style: Mapping[str, Any], document: Mapping[str, Any], name: 
     return palette.get(value.lower(), value) if _safe_css(value) else fallback
 
 
+def _mix_hex(first: str, second: str) -> str | None:
+    """The midpoint of two #rrggbb colours, or None when either is another form."""
+    if not all(re.fullmatch(r"#[0-9a-fA-F]{6}", value) for value in (first, second)):
+        return None
+    return "#" + "".join(f"{(int(first[i:i + 2], 16) + int(second[i:i + 2], 16)) // 2:02x}"
+                         for i in (1, 3, 5))
+
+
 def _theme_css(colors: Mapping[str, Any], shell: Mapping[str, Any], rounding: str) -> str:
     values = dict(FALLBACK_THEME)
     palette = colors
@@ -266,6 +267,10 @@ def _theme_css(colors: Mapping[str, Any], shell: Mapping[str, Any], rounding: st
         found = _first(palette, name)
         if found is not None:
             values[name] = found
+    if _first(palette, "orange") is None:
+        # The recency colour for "edited today": a theme without an orange
+        # gets its own red and yellow mixed, not the fallback palette's orange.
+        values["orange"] = _mix_hex(values["red"], values["yellow"]) or values["orange"]
 
     numbered = {
         0: _first(palette, "dark_background") or values["background"],
@@ -349,13 +354,18 @@ class AtlasState:
         self.interval = interval
         self.rounding_command = rounding_command
         self.lock = threading.RLock()
+        self.build_lock = threading.Lock()
+        self.index_refresh_started = False
         self.index: dict[str, Any] | None = None
+        self.signature: tuple[Any, ...] | None = None
         self.last_index_attempt = 0.0
         self.index_error: str | None = None
         self.fingerprints: dict[tuple[str, str], str] = {}
         self.theme = _theme_css({}, {}, "0px")
         self.theme_error: str | None = None
         self.last_theme_attempt = 0.0
+        self.rounding_signature: tuple[Any, ...] | None = None
+        self.rounding_value = "0px"
         self.clients: set[queue.Queue[tuple[str, Any, queue.Queue[bool] | None]]] = set()
 
     def _broadcast(self, event: str, data: Any) -> None:
@@ -408,6 +418,10 @@ class AtlasState:
         with self.lock:
             return len(self.clients)
 
+    def has_client(self, client: queue.Queue[tuple[str, Any, queue.Queue[bool] | None]]) -> bool:
+        with self.lock:
+            return client in self.clients
+
     def _fingerprint_index(self, index: Mapping[str, Any]) -> dict[tuple[str, str], str]:
         roots = {item["name"]: Path(item["path"]) for item in index["roots"]}
         result: dict[tuple[str, str], str] = {}
@@ -424,9 +438,10 @@ class AtlasState:
                     status = os.fstat(handle.fileno())
                     data = handle.read(MAX_FILE_BYTES + 1) if status.st_size <= MAX_FILE_BYTES else b""
                 if status.st_size > MAX_FILE_BYTES or len(data) > MAX_FILE_BYTES:
-                    result[(item["root"], item["path"])] = f"{status.st_size}:{status.st_mtime_ns}"
+                    content = str(status.st_size)
                 else:
-                    result[(item["root"], item["path"])] = hashlib.sha256(data).hexdigest()
+                    content = hashlib.sha256(data).hexdigest()
+                result[(item["root"], item["path"])] = f"{content}:{status.st_mtime_ns}:{item['open']}"
             except OSError:
                 # A race with an editor deletion is represented by omission.
                 pass
@@ -437,29 +452,63 @@ class AtlasState:
         with self.lock:
             if not force and self.index is not None and now - self.last_index_attempt < self.interval:
                 return self.index
-            self.last_index_attempt = now
-            old = self.index
-            old_fingerprints = self.fingerprints
+        if not self.build_lock.acquire(blocking=self.index is None or force):
+            return self.index
+        try:
+            with self.lock:
+                if not force and self.index is not None and now - self.last_index_attempt < self.interval:
+                    return self.index
+                self.last_index_attempt = now
+                old = self.index
+                old_fingerprints = self.fingerprints
+                previous_error = self.index_error
             try:
+                signature = self.store.signature()
+                if not force and old is not None and not previous_error and signature == self.signature:
+                    return old
                 candidate = self.store.rebuild()
                 fingerprints = self._fingerprint_index(candidate)
             except (atlas_index.IndexError, OSError) as exc:
-                self.index_error = str(exc)
+                error = str(exc)
+                with self.lock:
+                    self.index_error = error
+                if old is not None and error != previous_error:
+                    self._broadcast("index-error", {"error": error, "generatedAt": old.get("generatedAt")})
                 return old
-            self.index = candidate
-            self.fingerprints = fingerprints
-            self.index_error = None
-        if old is not None and atlas_index.semantic_index(old) != atlas_index.semantic_index(candidate):
-            self._broadcast("index", {})
-        if old is not None:
-            changed = sorted(set(old_fingerprints) | set(fingerprints))
-            for root, path in changed:
-                if old_fingerprints.get((root, path)) != fingerprints.get((root, path)):
-                    self._broadcast("file", {"root": root, "path": path})
-        return candidate
+            with self.lock:
+                self.index = candidate
+                self.signature = signature
+                self.fingerprints = fingerprints
+                self.index_error = None
+            if old is not None:
+                changed = sorted(key for key in set(old_fingerprints) | set(fingerprints)
+                                 if old_fingerprints.get(key) != fingerprints.get(key))
+                many_files = len(changed) > 16
+                if previous_error or many_files or atlas_index.semantic_index(old) != atlas_index.semantic_index(candidate):
+                    self._broadcast("index", {})
+                if not many_files:
+                    for root, path in changed:
+                        self._broadcast("file", {"root": root, "path": path})
+            return candidate
+        finally:
+            self.build_lock.release()
+
+    def _refresh_index_async(self) -> None:
+        try:
+            self.refresh_index()
+        finally:
+            with self.lock:
+                self.index_refresh_started = False
 
     def get_index(self) -> dict[str, Any]:
-        index = self.refresh_index()
+        with self.lock:
+            index = self.index
+            due = index is not None and time.monotonic() - self.last_index_attempt >= self.interval
+            if due and not self.index_refresh_started and not self.build_lock.locked():
+                self.index_refresh_started = True
+                threading.Thread(target=self._refresh_index_async, daemon=True).start()
+        if index is None:
+            index = self.refresh_index()
         if index is None:
             raise ServeError(HTTPStatus.SERVICE_UNAVAILABLE, self.index_error or "index unavailable")
         return index
@@ -494,7 +543,15 @@ class AtlasState:
                 shell = _read_toml(shell_path) if shell_path.exists() else {}
                 if self.shell_override_path.exists():
                     shell = _merge_toml(shell, _read_toml(self.shell_override_path))
-                candidate = _theme_css(colors, shell, self._rounding())
+                hypr_dir = Path(os.environ.get("HOME", str(Path.home()))) / ".config/hypr"
+                hypr_files = sorted(hypr_dir.rglob("*.conf")) if hypr_dir.is_dir() else []
+                rounding_signature = (str(self.theme_dir.resolve()),
+                                      tuple((str(path), atlas_index._stat_signature(path)) for path in
+                                            [colors_path, shell_path, self.shell_override_path, *hypr_files]))
+                if rounding_signature != self.rounding_signature:
+                    self.rounding_value = self._rounding()
+                    self.rounding_signature = rounding_signature
+                candidate = _theme_css(colors, shell, self.rounding_value)
             except (OSError, ValueError, TypeError) as exc:
                 self.theme_error = str(exc)
                 return old
@@ -664,7 +721,10 @@ class AtlasRequestHandler(BaseHTTPRequestHandler):
                 css = self.server.state.refresh_theme().encode("utf-8")
                 self._send(HTTPStatus.OK, css, "text/css; charset=utf-8")
             elif route == "/api/index":
-                self._json(self.server.state.get_index())
+                index = self.server.state.get_index()
+                if self.server.state.index_error:
+                    raise ServeError(HTTPStatus.SERVICE_UNAVAILABLE, self.server.state.index_error)
+                self._json(index)
             elif route == "/api/file":
                 query = parse_qs(split.query, keep_blank_values=True, errors="surrogateescape")
                 root = query.get("root", [""])[0]
@@ -773,6 +833,9 @@ class AtlasRequestHandler(BaseHTTPRequestHandler):
             self.wfile.flush()
             next_refresh = time.monotonic()
             while True:
+                if not self.server.state.has_client(client):
+                    self.close_connection = True
+                    return
                 # An SSE connection is the server's refresh clock.  The queue
                 # wait is short enough to deliver events promptly.  Each
                 # refresh tick writes a comment so closed idle sockets are
@@ -789,6 +852,9 @@ class AtlasRequestHandler(BaseHTTPRequestHandler):
                     event, data, delivered = client.get(timeout=timeout)
                 except queue.Empty:
                     continue
+                if not self.server.state.has_client(client):
+                    self.close_connection = True
+                    return
                 payload = f"event: {event}\ndata: {json.dumps(data, ensure_ascii=True, separators=(',', ':'))}\n\n"
                 self.wfile.write(payload.encode("utf-8"))
                 self.wfile.flush()
@@ -820,4 +886,6 @@ def create_server(*, port: int = 4137, config_path: str | Path | None = None,
 def serve(*, port: int = 4137) -> None:
     """Run the foreground service used by the QML supervisor."""
     with create_server(port=port) as server:
+        if port == 0:
+            print(server.server_address[1], flush=True)
         server.serve_forever(poll_interval=0.5)

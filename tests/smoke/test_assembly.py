@@ -50,6 +50,18 @@ class PluginAssemblyTests(unittest.TestCase):
         self.assertIn("atlas.selectedFacts ? atlas.selectedFacts.file.title : \"No file selected\"", checked)
         self.assertGreaterEqual(len(checked), 20)
 
+    def test_popup_recency_components_are_present(self) -> None:
+        row = (ROOT / "PanelFileRow.qml").read_text(encoding="utf-8")
+        panel = (ROOT / "Panel.qml").read_text(encoding="utf-8")
+        content = (ROOT / "PanelContent.qml").read_text(encoding="utf-8")
+        pages = (ROOT / "PanelPages.qml").read_text(encoding="utf-8")
+        self.assertIn("id: recencyDot", row)
+        self.assertIn("Accessible.name:", row)
+        self.assertIn("Accessible.description:", row)
+        self.assertIn("interval: 30000", panel)
+        self.assertIn("id: modificationRow", pages)
+        self.assertIn("PanelFindingRow", content)
+
     def test_popup_and_bar_tooltip_name_unavailable_entries_by_reason(self) -> None:
         panel = (ROOT / "Panel.qml").read_text(encoding="utf-8")
         content = (ROOT / "PanelContent.qml").read_text(encoding="utf-8")
@@ -58,7 +70,7 @@ class PluginAssemblyTests(unittest.TestCase):
         self.assertIn('text: atlas.unavailableLabels.join(" · ")', content)
         self.assertNotIn("Stale analysis unavailable", panel + content)
 
-    def test_settings_keyboard_activates_focused_control_once(self) -> None:
+    def test_settings_handler_source_routes_activation(self) -> None:
         popup = (ROOT / "PanelPopup.qml").read_text(encoding="utf-8")
         roots = (ROOT / "PanelRoots.qml").read_text(encoding="utf-8")
         kinds = (ROOT / "PanelKinds.qml").read_text(encoding="utf-8")
@@ -164,4 +176,7 @@ class PluginAssemblyTests(unittest.TestCase):
         metrics = json.loads(completed.stdout)
         self.assertEqual(metrics["probe"], "fixture-index")
         self.assertGreater(metrics["files"], 0)
-        self.assertGreaterEqual(metrics["references"], 0)
+        self.assertEqual(metrics["files"], 4)
+        self.assertEqual(metrics["references"], 8)
+        self.assertEqual(metrics["orphans"], 1)
+        self.assertEqual(metrics["dangling"], 2)

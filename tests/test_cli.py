@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import resource
+import select
 import shutil
 import socket
 import subprocess
@@ -45,6 +46,9 @@ class CliTests(unittest.TestCase):
             target = self.launchers / name
             shutil.copyfile(FIXTURE / "record_argv.py", target)
             target.chmod(0o755)
+        closed_socket = socket.socket()
+        closed_socket.bind(("127.0.0.1", 0))
+        self.addCleanup(closed_socket.close)
         self.env = os.environ.copy()
         self.env.update({
             "HOME": str(self.home),
@@ -54,14 +58,8 @@ class CliTests(unittest.TestCase):
             "ATLAS_ARGV_LOG": str(self.argv_log),
             "PYTHONDONTWRITEBYTECODE": "1",
             # A closed port: the desktop runner has the installed Atlas server on 4137.
-            "ATLAS_SERVER_URL": f"http://127.0.0.1:{self.closed_port()}",
+            "ATLAS_SERVER_URL": f"http://127.0.0.1:{closed_socket.getsockname()[1]}",
         })
-
-    @staticmethod
-    def closed_port() -> int:
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            return probe.getsockname()[1]
 
     def run_cli(self, *arguments: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, "-B", str(ATLAS), *arguments], cwd=PROJECT,
@@ -95,7 +93,25 @@ class CliTests(unittest.TestCase):
         self.git(root, "add", ".")
         self.git(root, "commit", "-m", "fixture")
 
-    def test_many_documents_with_path_tokens_index_in_linear_time(self) -> None:
+    def test_files_reply_exposes_modified_and_open(self) -> None:
+        self.home.mkdir()
+        self.committed(self.root)
+        target = self.root / "README.md"
+        os.utime(target, ns=(1_700_000_123_456_789_000, 1_700_000_123_456_789_000))
+        swap_dir = self.home / ".local/state/nvim/swap"
+        swap_dir.mkdir(parents=True)
+        (swap_dir / f"{str(target).replace('/', '%')}.swp").touch()
+
+        result, reply = self.reply("files", "--path", str(self.root))
+
+        self.assertEqual((result.returncode, reply["ok"]), (0, True))
+        files = {item["path"]: item for item in reply["data"]["files"]}
+        self.assertEqual((files["README.md"]["timeSource"], files["README.md"]["modified"], files["README.md"]["open"]),
+                         ("git", "2023-11-14T22:15:23.456789000Z", True))
+        self.assertNotEqual(files["README.md"]["time"], files["README.md"]["modified"])
+        self.assertFalse(files["docs/guide.md"]["open"])
+
+    def test_650_documents_with_path_tokens_finish_within_budget(self) -> None:
         crowded = self.root / "crowded"
         crowded.mkdir()
         (crowded / "target.md").write_text("# Target\n", encoding="utf-8")
@@ -107,12 +123,11 @@ class CliTests(unittest.TestCase):
         result, reply = self.reply("orphans", "--path", str(self.root))
         elapsed = time.monotonic() - started
 
-        # Rebuilding basename and local-path scans for each source took 9-12 s; the fix takes 0.3 s.
         self.assertLess(elapsed, 3)
         self.assertEqual((result.returncode, reply["ok"], result.stderr), (0, True, ""))
         self.assertNotIn("crowded/target.md", {item["path"] for item in reply["data"]["orphans"]})
 
-    def test_hostile_lines_index_in_under_a_second(self) -> None:
+    def test_hostile_lines_finish_within_budget(self) -> None:
         (self.root / "README.md").write_text("# a" + " " * 3000 + "x\n", encoding="utf-8")
         (self.root / "docs" / "brackets.md").write_text(
             "[[" * 20000 + "\n" + "[" * 200000 + "\n" + "[a](" * 50000 + "\n", encoding="utf-8")
@@ -121,27 +136,22 @@ class CliTests(unittest.TestCase):
         result, reply = self.reply("files", "--path", str(self.root))
         elapsed = time.monotonic() - started
 
-        # The old H1 regex took 24 s on README.md alone; a "[" in the wikilink or
-        # markdown label class takes several seconds on the bracket runs, and a link
-        # target whose bracket pair may be followed by "(" takes minutes on "[a](".
         self.assertLess(elapsed, 1)
         self.assertEqual((result.returncode, reply["ok"]), (0, True))
         titles = {item["path"]: item["title"] for item in reply["data"]["files"]}
         self.assertEqual(titles["README.md"], "a" + " " * 3000 + "x")
 
-    def test_long_lines_of_links_index_in_linear_time(self) -> None:
+    def test_20000_links_finish_within_budget(self) -> None:
         (self.root / "docs" / "links.md").write_text("[a](guide.md) " * 20000 + "\n", encoding="utf-8")
 
         started = time.monotonic()
         result, reply = self.reply("files", "--path", str(self.root))
         elapsed = time.monotonic() - started
 
-        # Rescanning every consumed link span for each path token takes 9 s or
-        # more here; the fix takes under 1 s.
         self.assertLess(elapsed, 3)
         self.assertEqual((result.returncode, reply["ok"]), (0, True))
 
-    def test_unmatched_backtick_runs_index_in_linear_time(self) -> None:
+    def test_unmatched_backtick_runs_finish_within_budget(self) -> None:
         # 600 openers of distinct lengths that never close, then 150,000 closed spans.
         (self.root / "docs" / "backticks.md").write_text(
             " ".join("`" * length for length in range(2, 602)) + " " + "` " * 150000 + "\n",
@@ -151,8 +161,6 @@ class CliTests(unittest.TestCase):
         result, reply = self.reply("files", "--path", str(self.root))
         elapsed = time.monotonic() - started
 
-        # Rescanning the rest of the line for each unmatched opener takes 21 s
-        # here; the fix takes 0.1 s.
         self.assertLess(elapsed, 3)
         self.assertEqual((result.returncode, reply["ok"]), (0, True))
 
@@ -527,6 +535,15 @@ class CliTests(unittest.TestCase):
         }]))
         self.assertNotIn(".github/workflows/check.yml", [item["path"] for item in before["data"]["files"]])
         self.assertIn(".github/workflows/check.yml", [item["path"] for item in after["data"]["files"]])
+        _result, changed = self.reply("kind-set", "workflow", "--path", "other/")
+        self.assertEqual(changed["data"]["config"]["kinds"][0]["match"],
+                         {"paths": ["other/"], "extensions": [".yml"]})
+        _result, changed = self.reply("kind-set", "workflow", "--ext", ".yaml")
+        self.assertEqual(changed["data"]["config"]["kinds"][0]["match"],
+                         {"paths": ["other/"], "extensions": [".yaml"]})
+        _result, changed = self.reply("kind-set", "workflow", "--ext=")
+        self.assertEqual(changed["data"]["config"]["kinds"][0]["match"],
+                         {"paths": ["other/"], "extensions": []})
 
     def test_env_deny_wins_over_user_kind(self) -> None:
         (self.root / ".env").write_text("TOKEN=secret\n", encoding="utf-8")
@@ -603,6 +620,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual((codex["startupBytes"], codex["startupTokensApprox"]), (90, 23))
         self.assertEqual(codex["referencedBytes"], codex["referenced"][0]["bytes"])
         self.assertIn("approximate", self.run_cli("cost", "--root", "Demo Ω").stdout)
+
+    def test_search_skips_oversized_content_but_matches_its_path(self) -> None:
+        big = self.root / "docs" / "large-needle.md"
+        big.write_bytes(b"hidden phrase\n" + b"x" * atlas_index.MAX_FILE_BYTES)
+        result, reply = self.reply("search", "hidden phrase", "--path", str(self.root))
+        self.assertEqual((result.returncode, reply["data"]["matches"]), (0, []))
+        self.assertIn({"root": self.root.name, "path": "docs/large-needle.md",
+                       "reason": "content exceeds 2 MB"}, reply["data"]["unavailable"])
+        _result, reply = self.reply("search", "large-needle", "--path", str(self.root))
+        self.assertEqual([(item["file"]["path"], item["line"]) for item in reply["data"]["matches"]],
+                         [("docs/large-needle.md", 0)])
+
+    def test_search_reports_oversized_file_after_match_limit(self) -> None:
+        (self.root / "a.md").write_text("cap-needle\n" * 200, encoding="utf-8")
+        (self.root / "z.md").write_bytes(b"x" * (atlas_index.MAX_FILE_BYTES + 1))
+        result, reply = self.reply("search", "cap-needle", "--path", str(self.root))
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual([(item["file"]["path"], item["line"]) for item in reply["data"]["matches"]],
+                         [("a.md", line) for line in range(1, 201)])
+        self.assertIn({"root": self.root.name, "path": "z.md",
+                       "reason": "content exceeds 2 MB"}, reply["data"]["unavailable"])
+
+    def test_encoded_markdown_target_has_no_dangling_or_orphan_finding(self) -> None:
+        root = self.base / "encoded"
+        root.mkdir()
+        (root / "My File.md").write_text("# Target\n", encoding="utf-8")
+        (root / "README.md").write_text("[Target](My%20File.md)\n", encoding="utf-8")
+        for command in ("dangling", "orphans"):
+            result, reply = self.reply(command, "--path", str(root))
+            self.assertEqual((result.returncode, reply["data"][command]), (0, []))
 
     def test_dangling_table_omits_inline_code_examples(self) -> None:
         result = self.run_cli("dangling", "--path", str(INDEX_FIXTURE))
@@ -722,13 +769,12 @@ class CliTests(unittest.TestCase):
 
     def test_serve_command_runs_real_ephemeral_http_server(self) -> None:
         self.add_root()
-        with socket.socket() as probe:
-            probe.bind(("127.0.0.1", 0))
-            port = probe.getsockname()[1]
-        process = subprocess.Popen([sys.executable, "-B", str(ATLAS), "serve", "--port", str(port)],
+        process = subprocess.Popen([sys.executable, "-B", str(ATLAS), "serve", "--port", "0"],
                                    cwd=PROJECT, env=self.env, stdout=subprocess.PIPE,
                                    stderr=subprocess.PIPE, text=True)
         self.addCleanup(self._stop_process, process)
+        self.assertTrue(select.select([process.stdout], [], [], 5)[0])
+        port = int(process.stdout.readline().strip())
         deadline = time.monotonic() + 5
         body = None
         while time.monotonic() < deadline:

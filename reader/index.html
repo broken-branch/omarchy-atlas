@@ -8,32 +8,32 @@
   <link rel="stylesheet" href="/app.css">
   <script defer src="/vendor/markdown-it.min.js"></script>
   <script defer src="/vendor/highlight.min.js"></script>
-  <script defer src="/vendor/mermaid.min.js"></script>
-  <script defer src="/vendor/force-graph.min.js"></script>
   <script type="module" src="/app.js"></script>
 </head>
 <body>
-  <header class="toolbar">
+  <header id="toolbar" class="toolbar">
     <button id="back-button" disabled>← Back</button><button id="forward-button" disabled>Forward →</button>
     <nav id="breadcrumb" aria-label="Location"><button id="atlas-button" class="crumb">Atlas</button><span id="crumb-tail"></span></nav>
-    <div class="view-actions"><button id="files-button">Files o</button><button id="neighbourhood-button" aria-pressed="false">Neighbourhood n</button><button id="map-button">Whole map m</button></div>
+    <div class="view-actions"><button id="files-button" aria-keyshortcuts="o">Files <span aria-hidden="true">o</span></button><button id="neighbourhood-button" aria-keyshortcuts="n" aria-pressed="false">Neighbourhood <span aria-hidden="true">n</span></button><button id="map-button" aria-keyshortcuts="m">Whole map <span aria-hidden="true">m</span></button></div>
+    <button id="hide-toolbar" class="toolbar-toggle" aria-label="Hide top bar" aria-keyshortcuts="z" aria-expanded="true" aria-controls="toolbar" title="Hide top bar · z">⌃</button>
   </header>
+  <button id="show-toolbar" class="toolbar-handle" aria-label="Show top bar" aria-keyshortcuts="z" aria-expanded="false" aria-controls="toolbar" title="Show top bar · z" hidden>Show top bar · z</button>
   <div id="status" role="status"></div><button id="retry" hidden>Retry</button>
   <div id="theme-status" role="status"></div>
   <div id="workspace">
     <section id="read-view">
-      <nav class="rail" aria-label="Document"><form id="search-form"><label for="search">Find in document</label><input id="search" type="search"><button>Find</button></form><div id="toc" tabindex="-1" aria-label="Outline"></div></nav>
+      <nav class="rail" aria-label="Document"><form id="search-form"><label for="search">Find in document</label><input id="search" type="search"><button>Find</button></form><div id="toc" role="navigation" tabindex="-1" aria-label="Outline"></div></nav>
       <main id="reading" tabindex="-1">
         <div class="file-step"><button id="previous-file" disabled>Previous file</button><button id="next-file" disabled>Next file</button></div>
         <h1 id="document-title"></h1>
         <div id="metadata"></div>
-        <div class="actions" id="reader-actions"><button data-action="map">Map m</button><button data-action="edit">Edit e</button><button data-action="details">Details d</button></div>
+        <div class="actions" id="reader-actions"><button data-action="map" aria-keyshortcuts="m">Map <span aria-hidden="true">m</span></button><button data-action="edit" aria-keyshortcuts="e">Edit <span aria-hidden="true">e</span></button><button data-action="details" aria-keyshortcuts="d">Details <span aria-hidden="true">d</span></button></div>
         <article id="document"></article><footer id="backlinks" tabindex="-1"></footer>
       </main>
     </section>
     <section id="map-view" aria-label="Whole map" hidden></section>
     <aside id="neighbourhood" aria-label="Neighbourhood" hidden>
-      <div class="pane-heading"><div><strong>Neighbourhood</strong><small>Direct references · all kinds</small></div><button data-action="close-neighbourhood">Close</button></div>
+      <div class="pane-heading"><strong>Neighbourhood</strong><button data-action="close-neighbourhood">Close</button></div>
       <div id="neighbour-list" role="listbox" aria-label="Direct references"></div>
     </aside>
   </div>
