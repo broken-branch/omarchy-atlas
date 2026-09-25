@@ -86,7 +86,7 @@ one, bind that command in `~/.config/hypr/bindings.lua`. Right-clicking the
 mark opens the selected file in the reader.
 
 **Reader.** Opens a document with headings, tables, task lists, highlighted
-code, Mermaid diagrams, an outline and a backlinks footer. The header has
+code, Mermaid diagrams shown as source, an outline and a backlinks footer. The header has
 Back, Forward and Files; Previous file and Next file walk the list you opened the
 document from; Edit opens it in the Omarchy default editor. The reader
 reloads when a file changes and restyles when the theme changes. Indexed

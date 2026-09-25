@@ -19,7 +19,7 @@
 4. Read. `o` or Enter in the popup, `atlas show --root NAME --path REL`, or a
    link in the reader opens the document in the reader window with the
    active Omarchy theme: headings, tables, task lists, highlighted code,
-   Mermaid diagrams, an outline, and a backlinks footer. Indexed references
+   Mermaid diagrams shown as source, an outline, and a backlinks footer. Indexed references
    in document text can be followed; impact relationships from
    `docs/impact.yml` appear in facts and the map. The header carries Back,
    Forward, the breadcrumb and Files · Neighbourhood ·

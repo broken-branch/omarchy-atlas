@@ -4,7 +4,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {CDPClient, aggregate, diagramState, main, sameMapView, selectTarget, settledMeasurement, shot, waitForSettle} = require('./probe_browser.js');
+const {CDPClient, aggregate, main, sameMapView, selectTarget, settledMeasurement, shot, waitForSettle} = require('./probe_browser.js');
 
 const fixture = name => JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/smoke', name), 'utf8'));
 
@@ -40,8 +40,8 @@ test('key probe sends trusted CDP key events and waits two frames per character'
   const client = {socket:{close() {}}, async command(method, params) { events.push([method, params]); }, async evaluate(expression) {
     events.push(['evaluate', expression]);
     if (expression.includes('const node=document.activeElement')) return {tag:'input', ariaLabel:'Search map', placeholder:null};
-    if (expression.includes('window.atlasProbe')) return {view:'map', location:'http://127.0.0.1:4137/map', target:null, theme:null, body:null, code:null, mermaid:null, scrollY:0, map:{view:{controlsHidden:true}}, mapControlsHidden:true};
-    return {view:'map', location:'http://127.0.0.1:4137/map', target:null, theme:null, body:null, code:null, mermaid:null, scrollY:0, map:{view:{controlsHidden:true}}};
+    if (expression.includes('window.atlasProbe')) return {view:'map', location:'http://127.0.0.1:4137/map', target:null, theme:null, body:null, code:null, scrollY:0, map:{view:{controlsHidden:true}}, mapControlsHidden:true};
+    return {view:'map', location:'http://127.0.0.1:4137/map', target:null, theme:null, body:null, code:null, scrollY:0, map:{view:{controlsHidden:true}}};
   }};
   const result = await main(['key', 'c/'], {pageClient:async () => client});
   assert.equal(result.probe, 'browser-key');
@@ -155,19 +155,4 @@ test('removing the paused-layout workspace result makes navigation wait for the 
 test('removing the two-second frame guard hides an inactive workspace with the generic timeout', async () => {
   const client = {evaluate: expression => expression.startsWith('window.') ? Promise.resolve({cooled:false, settleMs:null, settleReason:null}) : new Promise(() => {})};
   await assert.rejects(waitForSettle(client, 100, 5), /reader window must be on the active workspace/);
-});
-
-test('diagram state counts rendered SVGs and reports path style and failures', () => {
-  const pathNode = {}, failed = {textContent:'  Diagram unavailable: bad syntax\ngraph TD'};
-  const root = {
-    querySelector(selector) { return selector === '.diagram svg path' ? pathNode : null; },
-    querySelectorAll(selector) {
-      if (selector === '.diagram') return [{textContent:'rendered'}, failed];
-      if (selector === '.diagram svg') return [{}];
-      return [];
-    }
-  };
-  assert.deepEqual(diagramState(root, node => node === pathNode ? {color:'rgb(1, 2, 3)', fill:'rgb(4, 5, 6)'} : {}), {
-    diagrams:2, svgs:1, color:'rgb(1, 2, 3)', fill:'rgb(4, 5, 6)', unavailable:[failed.textContent]
-  });
 });

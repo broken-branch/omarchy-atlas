@@ -63,15 +63,6 @@ export function recencyHTML(file, pill = false, now = Date.now()) {
   const root = escapeHTML(file.root), path = escapeHTML(file.path);
   return `<span class="recency${pill ? ' recency-pill' : ''}" role="img" data-recency-root="${root}" data-recency-path="${path}" data-level="${value.level}" aria-label="${value.label}" title="${value.label}"><span class="recency-dot" aria-hidden="true"></span><span class="recency-label" aria-hidden="true">${pill || value.level === 'hot' ? escapeHTML(value.label) : ''}</span></span>`;
 }
-export function themeOptions(get) {
-  return {startOnLoad: false, securityLevel: 'strict', theme: 'base', themeVariables: {
-    darkMode: get('--mode').trim() !== 'light', background: get('--background').trim(),
-    primaryColor: get('--selection').trim(), primaryTextColor: get('--foreground').trim(),
-    primaryBorderColor: get('--accent').trim(), lineColor: get('--muted').trim(),
-    secondaryColor: get('--control-fill').trim(), tertiaryColor: get('--background').trim(),
-    fontFamily: 'system-ui', textColor: get('--foreground').trim()
-  }};
-}
 export function probeTheme(style) {
   return Object.fromEntries(['--background', '--foreground', '--accent'].map(name => [name, style.getPropertyValue(name).trim()]));
 }
@@ -80,8 +71,11 @@ export function probeTheme(style) {
 // occurrences on their source lines; unmatched prose never invents an edge.
 export function createRenderer(markdownit, highlight) {
   const md = markdownit({html: false, linkify: false});
-  const highlightPart = (text, lang) => lang && highlight?.getLanguage(lang)
-    ? highlight.highlight(text, {language: lang, ignoreIllegals: true}).value : escapeHTML(text);
+  const highlightPart = (text, lang) => {
+    const language = lang === 'mermaid' && !highlight?.getLanguage(lang) ? 'plaintext' : lang;
+    return language && highlight?.getLanguage(language)
+      ? highlight.highlight(text, {language, ignoreIllegals: true}).value : escapeHTML(text);
+  };
   function code(text, line, env, lang) {
     return text.split('\n').map((part, offset) => {
       let cursor = 0, result = '';
@@ -141,11 +135,8 @@ export function createRenderer(markdownit, highlight) {
   });
   md.renderer.rules.fence = (tokens, idx, options, env) => {
     const token = tokens[idx], language = token.info.trim().split(/\s+/)[0];
-    if (language === 'mermaid') {
-      const id = env.diagrams.push(token.content) - 1;
-      return `<div class="diagram" data-diagram="${id}"><pre>${escapeHTML(token.content)}</pre></div>`;
-    }
-    return `<pre><code>${code(token.content, token.map[0] + 2, env, language)}</code></pre>`;
+    const source = `<pre><code>${code(token.content, token.map[0] + 2, env, language)}</code></pre>`;
+    return language === 'mermaid' ? `<div class="mermaid-source"><p>Mermaid diagram, shown as source</p>${source}</div>` : source;
   };
   md.core.ruler.after('inline', 'atlas_structure', state => {
     const slugs = new Map();
@@ -184,16 +175,16 @@ export function createRenderer(markdownit, highlight) {
     return src.startsWith('/raw/') ? `<img src="${escapeHTML(src)}" alt="${escapeHTML(token.content)}">` : escapeHTML(token.content);
   };
   return (content, target, references = []) => {
-    const env = {target, references, headings: [], diagrams: []};
+    const env = {target, references, headings: []};
     let html;
     if (/\.(mmd|mermaid)$/i.test(target.path)) {
-      env.diagrams.push(content); html = `<div class="diagram" data-diagram="0"><pre>${escapeHTML(content)}</pre></div>`;
+      html = `<div class="mermaid-source"><p>Mermaid diagram, shown as source</p><pre><code>${highlightPart(content, 'mermaid')}</code></pre></div>`;
     } else if (/\.md$/i.test(target.path)) html = md.render(content, env);
     else {
       const language = textLanguage(target.path);
       html = `<pre><code class="language-${language}">${highlightPart(content, language)}</code></pre>`;
     }
-    return {html, headings: env.headings, diagrams: env.diagrams};
+    return {html, headings: env.headings};
   };
 }
 
@@ -205,7 +196,7 @@ export function textLanguage(path) {
 
 export function renderFile(data, target, render) {
   return data.binary
-    ? {html:`<pre><code>${escapeHTML(`Binary file · ${data.bytes} bytes`)}</code></pre>`, headings:[], diagrams:[]}
+    ? {html:`<pre><code>${escapeHTML(`Binary file · ${data.bytes} bytes`)}</code></pre>`, headings:[]}
     : render(data.content, target, data.references.outbound);
 }
 
@@ -268,10 +259,10 @@ export async function startApp() {
   let coldTargetPending = route.view === 'map' && !!route.target && !(initialHistoryState?.map && 'selected' in initialHistoryState.map);
   let map = null, scope = initialHistoryState?.map?.scope || null, mapModule = null, mapLoading = null;
   let mapIndex = null, mapScope = null;
-  let generation = 0, factsGeneration = 0, diagramID = 0, visitIndex = initialHistoryState?.atlasIndex || 0;
+  let generation = 0, factsGeneration = 0, visitIndex = initialHistoryState?.atlasIndex || 0;
   let maxVisitIndex = historyHighWater(sessionStorage, visitIndex, !initialHistoryState?.atlas);
-  let diagrams = [], capturedFiles = [], pickerScope = null, overlay = null, overlayOpener = null;
-  let renderQueue = Promise.resolve(), themeQueue = Promise.resolve(), shown = null, indexFailure = null;
+  let capturedFiles = [], pickerScope = null, overlay = null, overlayOpener = null;
+  let themeQueue = Promise.resolve(), shown = null, indexFailure = null;
   const libraryLoads = new Map();
   function loadLibrary(name) {
     if (!libraryLoads.has(name)) libraryLoads.set(name, new Promise((resolve, reject) => {
@@ -335,23 +326,6 @@ export async function startApp() {
     const previous = adjacentFile(capturedFiles, route.target, -1), next = adjacentFile(capturedFiles, route.target, 1);
     $('previous-file').disabled = !previous; $('next-file').disabled = !next;
     $('previous-file').hidden = !previous; $('next-file').hidden = !next;
-  }
-  function drawDiagrams() {
-    const nodes = [...$('document').querySelectorAll('[data-diagram]')], sources = diagrams.slice(), saved = position();
-    if (!nodes.length) return renderQueue;
-    renderQueue = renderQueue.catch(() => {}).then(async () => {
-      try { await loadLibrary('mermaid'); }
-      catch (error) { for (const node of nodes) if (node.isConnected) node.textContent = `Diagram unavailable: ${error.message}\n${sources[Number(node.dataset.diagram)]}`; return; }
-      const style = getComputedStyle(document.documentElement);
-      window.mermaid.initialize(themeOptions(name => style.getPropertyValue(name)));
-      for (const node of nodes) {
-        if (!node.isConnected) continue;
-        try { const result = await window.mermaid.render(`atlas-diagram-${++diagramID}`, sources[Number(node.dataset.diagram)]); if (node.isConnected) { node.innerHTML = result.svg; result.bindFunctions?.(node); } }
-        catch (error) { if (node.isConnected) node.textContent = `Diagram unavailable: ${error.message}\n${sources[Number(node.dataset.diagram)]}`; }
-      }
-      if (nodes.every(node => node.isConnected)) restore(saved);
-    });
-    return renderQueue;
   }
   function referenceList(refs, direction) {
     return refs.map(ref => `<li><span>line ${ref.line}</span> ${direction === 'inbound' ? `${recencyHTML(fileFor(ref.from))} <a href="${escapeHTML(routeURL('read', ref.from))}">${escapeHTML(ref.from.root + '/' + ref.from.path)}</a> — ${escapeHTML(ref.text)}` : referenceHTML(ref)}</li>`).join('');
@@ -422,7 +396,6 @@ export async function startApp() {
       shown = target; currentFile = data.file;
       sessionStorage.setItem('atlas-last-target', JSON.stringify(target));
       const result = renderFile(data, target, render);
-      diagrams = result.diagrams;
       $('document-title').textContent = data.file.title;
       $('document').innerHTML = result.html;
       if (result.headings[0]?.level === 1) { $('document').querySelector('h1')?.remove(); result.headings[0].id = 'document-title'; }
@@ -432,7 +405,7 @@ export async function startApp() {
       $('backlinks').innerHTML = '<h2>Backlinks</h2>' + (roots.length ? roots.map(root => `<h3>${escapeHTML(root)}</h3><ul>${referenceList(data.references.inbound.filter(ref => ref.from.root === root), 'inbound')}</ul>`).join('') : '<p>No inbound references.</p>');
       const unavailable = (index?.unavailable || []).filter(item => item.root === target.root && (!item.path || item.path === target.path));
       if (unavailable.length) $('metadata').insertAdjacentHTML('beforeend', `<p>Stale analysis unavailable: ${unavailable.map(item => escapeHTML(item.reason)).join('; ')}</p>`);
-      renderNeighbours(data); message(indexFailure ? `${indexFailure} · Retaining index from ${index?.generatedAt || 'last successful refresh'}` : '', !!indexFailure); restore(saved); await drawDiagrams(); if (ticket === generation) restore(saved);
+      renderNeighbours(data); message(indexFailure ? `${indexFailure} · Retaining index from ${index?.generatedAt || 'last successful refresh'}` : '', !!indexFailure); restore(saved);
     } catch (error) {
       if (ticket !== generation) return;
       shown = null; $('document-title').textContent = error.status === 404 ? 'File missing' : error.status === 413 ? 'File too large' : 'File unavailable'; $('metadata').innerHTML = `<p>${escapeHTML(target.root + '/' + target.path)}</p>`; $('document').textContent = error.status === 404 ? 'The file could not be found.' : error.status === 413 ? 'This file exceeds the 2 MB reader limit.' : 'The server could not load this file.'; $('backlinks').textContent = ''; message(error.message, true);
@@ -605,7 +578,7 @@ export async function startApp() {
   events.addEventListener('index-error', event => { const failure = JSON.parse(event.data); indexFailure = failure.error; message(`${failure.error} · Retaining index from ${failure.generatedAt || 'last successful refresh'}`, true); });
   events.addEventListener('file', event => { const target = JSON.parse(event.data); if (route.view === 'read' && sameTarget(target, route.target)) loadRead(position()); });
   events.addEventListener('show', event => { const next = JSON.parse(event.data); navigate(next.view, {root:next.root, path:next.path}); });
-  function reloadTheme() { themeQueue = themeQueue.catch(() => {}).then(() => replaceTheme(document, async () => { map?.setTheme(); await drawDiagrams(); $('theme-status').textContent = ''; })).catch(error => { $('theme-status').textContent = error.message; $('retry').hidden = false; }); }
+  function reloadTheme() { themeQueue = themeQueue.catch(() => {}).then(() => replaceTheme(document, () => { map?.setTheme(); $('theme-status').textContent = ''; })).catch(error => { $('theme-status').textContent = error.message; $('retry').hidden = false; }); }
   events.addEventListener('theme', reloadTheme);
   const recencyTimer = setInterval(updateRecency, 30000);
   window.addEventListener('pagehide', () => { clearInterval(recencyTimer); events.close(); map?.destroy(); }, {once:true});

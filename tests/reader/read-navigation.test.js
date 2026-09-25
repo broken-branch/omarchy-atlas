@@ -113,9 +113,7 @@ async function navigationHarness(options = {}) {
       get innerHTML() { return this.content; }, set innerHTML(value) { this.content = String(value); },
       classList:{values:new Set(), toggle(name, value) { value ? this.values.add(name) : this.values.delete(name); }, contains(name) { return this.values.has(name); }},
       attributes:{}, setAttribute(key, value) { this.attributes[key] = value; }, removeAttribute(key) { delete this.attributes[key]; },
-      querySelectorAll(selector) { if (id === 'document' && selector === '[data-diagram]' && this.content.includes('data-diagram')) {
-        const diagram = node('diagram'); diagram.dataset.diagram = '0'; diagram.isConnected = true; return [diagram];
-      } if (id === 'file-list' && selector === '[data-file]') return (this._files || []).map((_, i) => {
+      querySelectorAll(selector) { if (id === 'file-list' && selector === '[data-file]') return (this._files || []).map((_, i) => {
         const row = node(`file-${i}`); row.dataset.file = String(i); row.closest = query => query === '[data-file]' ? row : null; return row;
       }); return []; }, querySelector:() => null, closest(selector) { return ((id === 'file-search' || id === 'search') && selector.includes('input')) || (/^file-\d+$/.test(id) && selector === '[data-file]') ? this : null; }, contains:() => false,
       focus() { focused = id; }, scrollTo(x, y) { this.scrollLeft = x; this.scrollTop = y; }, insertAdjacentHTML() {}});
@@ -144,7 +142,7 @@ async function navigationHarness(options = {}) {
     setInterval:() => 1, clearInterval() {},
     getComputedStyle:() => ({getPropertyValue:() => ''}),
     document:documentNode,
-    window:{markdownit:vendor.markdownit, mermaid:{initialize() {}, async render() { return {svg:'<svg></svg>'}; }}, addEventListener(name, fn) { windowListeners[name] = fn; }},
+    window:{markdownit:vendor.markdownit, addEventListener(name, fn) { windowListeners[name] = fn; }},
     EventSource:class {addEventListener(name, fn) { serverEvents[name] = fn; } close() {}},
     fetch:async url => {
       requests.push(url);
@@ -227,12 +225,13 @@ test('clicking key hint spans activates reader and Details actions', async () =>
   assert.equal(h.node('map-view').hidden, false);
 });
 
-test('Mermaid loads only when a document contains a diagram', async () => {
+test('Mermaid files show source without loading a diagram library', async () => {
   const target = {root:'demo', path:'plot.mmd'};
   const h = await navigationHarness({target, href:'http://localhost/read/demo/plot.mmd',
     fileData:{file:{...target,title:'Plot'}, content:'graph LR\nA --> B', references:{inbound:[],outbound:[]}}});
-  assert.deepEqual(h.loadedLibraries, ['/vendor/mermaid.min.js']);
-  assert.equal(h.node('diagram').innerHTML, '<svg></svg>');
+  assert.deepEqual(h.loadedLibraries, []);
+  assert.match(h.node('document').innerHTML, /Mermaid diagram, shown as source/);
+  assert.match(h.node('document').innerHTML, /graph LR\nA --&gt; B/);
 });
 
 test('picker row keys follow the visible rows while the search input keeps native typing', async () => {

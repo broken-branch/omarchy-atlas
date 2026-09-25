@@ -70,7 +70,8 @@ test('real pinned renderer handles constructs and backend link identities', asyn
   assert.match(result.html, /src="\/raw\/demo\/docs\/images\/plot.svg"/);
   assert.doesNotMatch(result.html, /<script>/);
   assert.deepEqual(result.headings.map(h => h.id), ['reader-guide', 'next-steps', 'next-steps-1']);
-  assert.deepEqual(result.diagrams, ['graph LR\nA --> B\n']);
+  assert.match(result.html, /Mermaid diagram, shown as source<\/p><pre><code>/);
+  assert.match(result.html, /graph LR\nA --&gt; B/);
 });
 
 test('bare and fenced paths follow backend targets without guessing', async () => {
@@ -83,11 +84,15 @@ test('bare and fenced paths follow backend targets without guessing', async () =
   assert.doesNotMatch(html, /href="[^"]*unknown/);
 });
 
-test('external links are isolated and direct Mermaid keeps original source', async () => {
+test('external links are isolated and Mermaid files show escaped source', async () => {
   const {createRenderer} = await app;
   const render = createRenderer(vendor.markdownit, vendor.hljs);
   assert.match(render('[Web](https://example.com)', target).html, /target="_blank" rel="noopener noreferrer"/);
-  assert.deepEqual(render('graph LR\nA --> B', {...target, path:'a.mmd'}).diagrams, ['graph LR\nA --> B']);
+  for (const path of ['a.mmd', 'a.mermaid']) {
+    const html = render('graph LR\nA --> B <script>', {...target, path}).html;
+    assert.match(html, /Mermaid diagram, shown as source<\/p><pre><code>/);
+    assert.match(html, /graph LR\nA --&gt; B &lt;script&gt;/);
+  }
 });
 
 test('non-Markdown extension selects a stable highlight language instead of Markdown rendering', async () => {
@@ -111,17 +116,6 @@ test('binary response renders only its byte count instead of passing bytes to th
   assert.equal(result.html, '<pre><code>Binary file · 3 bytes</code></pre>');
   assert.deepEqual(result.headings, []);
   assert.equal(called, false);
-});
-
-test('theme uses live palette and strict diagrams', async () => {
-  const {themeOptions} = await app;
-  for (const mode of ['dark', 'light']) {
-    const values = {'--mode':mode, '--foreground':mode === 'dark' ? '#eeeeee' : '#111111', '--accent':'#336699'};
-    const config = themeOptions(key => values[key] || '#777777');
-    assert.equal(config.securityLevel, 'strict');
-    assert.equal(config.themeVariables.darkMode, mode === 'dark');
-    assert.equal(config.themeVariables.primaryTextColor, values['--foreground']);
-  }
 });
 
 test('stylesheet load precedes redraw; failure retains last usable stylesheet', async () => {

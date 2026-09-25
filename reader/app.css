@@ -45,6 +45,7 @@ body.toolbar-hidden .overlay { top: 10px; }
 article { font: 17px/1.65 system-ui, sans-serif; overflow-wrap: anywhere; }
 article h1, article h2, article h3 { line-height: 1.25; margin-top: 1.8em; }
 article img, article svg { max-width: 100%; height: auto; }
+.mermaid-source > p { margin-block: 1em .35em; color: var(--muted); font: .85em/1.4 system-ui, sans-serif; }
 pre { overflow: auto; padding: var(--spacing, 8px); background: var(--control-fill); border: 1px solid var(--control-border); }
 code { font-family: var(--font-monospace, monospace); font-size: .9em; background: var(--control-fill); }
 pre code { background: var(--clear, transparent); }

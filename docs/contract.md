@@ -457,8 +457,12 @@ use the system monospace alias. No shell evaluation/config writes.
 Missing or malformed individual tokens use their token defaults. Compare
 effective values, including atomic file replacement, not merely a poll tick.
 Absent theme uses defaults; a malformed TOML replacement retains the last good
-theme with a diagnostic. On `theme`, reload CSS then redraw canvas and Mermaid
+theme with a diagnostic. On `theme`, reload CSS then redraw canvas
 in place, preserving selected file, pins, zoom and scroll.
+
+Mermaid fenced blocks and `.mmd`/`.mermaid` files open in the reader as
+highlighted source under “Mermaid diagram, shown as source”. The reader does
+not render diagrams.
 
 ## Manifest and IPC
 

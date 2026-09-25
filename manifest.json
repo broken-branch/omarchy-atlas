@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.broken-branch.atlas",
   "name": "Atlas",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "author": "broken-branch",
   "license": "MIT",
   "description": "Map of the Markdown files in folders you register: links, orphans, broken links, stale docs, recent edits and AI agent instruction size",

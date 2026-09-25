@@ -34,18 +34,6 @@ function sameMapView(a, b) {
     && a.zoom === b.zoom && a.center.x === b.center.x && a.center.y === b.center.y
     && sameSelection(a.selected, b.selected);
 }
-function diagramState(root = document, computedStyle = getComputedStyle) {
-  const diagrams = [...root.querySelectorAll('.diagram')];
-  const sample = root.querySelector('.diagram svg path') || root.querySelector('.diagram foreignObject span');
-  const style = sample ? computedStyle(sample) : null;
-  return {
-    diagrams: diagrams.length,
-    svgs: root.querySelectorAll('.diagram svg').length,
-    color: style?.color || null,
-    fill: style?.fill || null,
-    unavailable: diagrams.filter(node => node.textContent.trimStart().startsWith('Diagram unavailable')).map(node => node.textContent)
-  };
-}
 class CDPClient {
   constructor(socket) { this.socket = socket; this.nextID = 1; this.pending = new Map(); socket.addEventListener('message', event => this.message(event.data)); }
   message(frame) {
@@ -97,12 +85,10 @@ async function pageClient() {
 }
 async function state(client) {
   return client.evaluate(`(() => {
-    const diagramState = ${diagramState.toString()};
     const style = node => { const value = getComputedStyle(node); return {color:value.color, backgroundColor:value.backgroundColor}; };
     const probe = window.atlasProbe || {};
     return {view:probe.view || null, location:location.href, target:probe.target || null, theme:probe.theme ? probe.theme() : null,
       body:style(document.body), code:(document.querySelector('pre code') ? style(document.querySelector('pre code')) : null),
-      mermaid:diagramState(document, getComputedStyle),
       scrollY:document.getElementById('reading')?.scrollTop ?? window.scrollY, map:probe.map || null,
       mapControlsHidden:probe.map?.view?.controlsHidden ?? null};
   })()`);
@@ -270,4 +256,4 @@ async function main(argv = process.argv.slice(2), dependencies = {}) {
   } finally { client.socket.close(); }
 }
 if (require.main === module) main().then(result => console.log(JSON.stringify(result))).catch(error => { console.log(JSON.stringify({probe:'browser', error:error.message})); process.exitCode = 1; });
-module.exports = {CDPClient, aggregate, controls, diagramState, key, main, nav, percentile, sameMapView, selectTarget, settledMeasurement, shot, waitForSettle};
+module.exports = {CDPClient, aggregate, controls, key, main, nav, percentile, sameMapView, selectTarget, settledMeasurement, shot, waitForSettle};

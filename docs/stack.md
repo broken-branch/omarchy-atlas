@@ -54,7 +54,7 @@ docs/ tests/ scripts/
   event stream. Re-indexes lazily (contract).
 - **Reader**: static HTML/CSS/JS in `reader/`, shown by
   `omarchy-launch-or-focus-webapp` in a Chromium `--app=` window. Markdown by
-  `markdown-it`, code by `highlight.js`, diagrams by `mermaid`, the map by
+  `markdown-it`, code and Mermaid source by `highlight.js`, the map by
   `force-graph` (d3-force plus canvas, pan/zoom and hover in one file) —
   pinned files in `reader/vendor/` with versions and SHA-256 in
   `reader/vendor/VERSIONS`, refreshed only by `scripts/vendor-update` at
@@ -88,7 +88,7 @@ manual and ships HEY, Basecamp and the rest as web apps. The shell process
 cannot host a browser view, and Qt rich text tops out at
 "serviceable" with no code highlighting. Splitting the *panel* (lists, facts,
 keyboard — where QML is strong) from the *reader and map* (typography,
-highlighting, diagrams, a thousand animated nodes — where the browser is
+highlighting, Mermaid source, a thousand animated nodes — where the browser is
 strong) is cheaper than either trying to do both.
 
 The workload is small: hundreds of Markdown files, with the reader I/O-bound
@@ -96,6 +96,8 @@ in a browser. Nothing here is faster or
 safer for being compiled.
 
 ## Rejected
+
+- **Rendered Mermaid diagrams.** The Omarchy marketplace security baseline rejects text files over 512 KiB; the vendored Mermaid distribution exceeds that limit. Mermaid fences and `.mmd`/`.mermaid` files remain indexed and show highlighted source in the reader.
 
 - **A custom installer** (`bin/install` copying into the plugins dir with
   ownership markers and rollback), the plugin payload under a `plugin/`

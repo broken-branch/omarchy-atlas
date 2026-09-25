@@ -2,18 +2,7 @@ Third-party code inside the vendored bundles
 
 Each file in this directory is an unmodified upstream distribution; VERSIONS
 records versions, sources and checksums, and the LICENSE.* files hold each
-library's own licence. Two bundles also contain code from other packages.
-Their notices ship inside the minified files; mermaid.min.js carries most of
-them in its "Bundled license information" comments.
-
-mermaid.min.js (mermaid 12.0.0, MIT) bundles its dependencies, including:
-- DOMPurify 3.4.12 (Apache-2.0 or MPL-2.0)
-- chevrotain (Apache-2.0) and langium (MIT), through @mermaid-js/parser (MIT)
-- cytoscape, cytoscape-cose-bilkent and cytoscape-fcose (MIT)
-- d3 (ISC) and d3-sankey (BSD-3-Clause)
-- lodash-es (MIT), dagre-d3-es (MIT), dayjs (MIT), KaTeX (MIT), khroma (MIT),
-  marked (MIT), roughjs (MIT), stylis (MIT), uuid (MIT), es-toolkit (MIT),
-  @braintree/sanitize-url (MIT), @iconify/utils (MIT), @upsetjs/venn.js (MIT)
+library's own licence. The force-graph bundle also contains code from other packages.
 
 force-graph.min.js (force-graph 1.51.4, MIT) bundles:
 - d3-array, d3-drag, d3-scale, d3-scale-chromatic, d3-selection and d3-zoom

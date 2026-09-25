@@ -22,11 +22,6 @@ PINS = {
         "https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.12.0/highlight.min.js",
         "BSD-3-Clause",
     ),
-    "mermaid.min.js": (
-        "mermaid 12.0.0",
-        "https://cdn.jsdelivr.net/npm/mermaid@12.0.0/dist/mermaid.min.js",
-        "MIT",
-    ),
     "force-graph.min.js": (
         "force-graph 1.51.4",
         "https://cdn.jsdelivr.net/npm/force-graph@1.51.4/dist/force-graph.min.js",
@@ -37,7 +32,6 @@ PINS = {
 LICENSES = {
     "LICENSE.markdown-it": "Copyright (c) 2014 Vitaly Puzrin, Alex Kocharin.",
     "LICENSE.highlight.js": "BSD 3-Clause License",
-    "LICENSE.mermaid.txt": "MIT License",
     "LICENSE.force-graph": "MIT License",
 }
 
@@ -83,7 +77,6 @@ class VendorTests(unittest.TestCase):
             const distributions = [
               ['markdown-it.min.js', 'markdownit', 'function'],
               ['highlight.min.js', 'hljs', 'object'],
-              ['mermaid.min.js', 'mermaid', 'object'],
               ['force-graph.min.js', 'ForceGraph', 'function'],
             ];
             for (const [filename, globalName, expectedType] of distributions) {
