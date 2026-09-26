@@ -1,6 +1,6 @@
-# Atlas
+# Markdown Atlas
 
-Atlas is an Omarchy plugin that maps the Markdown files in folders you
+Markdown Atlas is an Omarchy plugin that maps the Markdown files in folders you
 register. It shows which files link to which, files nothing links to, broken
 links, docs older than the code they describe, and the approximate size of
 the instruction files each AI coding agent loads when a session starts
@@ -8,7 +8,7 @@ the instruction files each AI coding agent loads when a session starts
 rules). It never edits, moves or renames a
 file.
 
-Atlas has three parts that share one index:
+Markdown Atlas has three parts that share one index:
 
 - a bar widget whose popup holds search, roots, findings and file facts;
 - a reader and map in the browser, opened as an Omarchy web app, following
@@ -25,14 +25,14 @@ Atlas has three parts that share one index:
 
 ![Contact sheet of the map in all 22 Omarchy themes](docs/assets/themes.png)
 
-Atlas follows every Omarchy theme live; the theme tests and `scripts/theme-shots`
+Markdown Atlas follows every Omarchy theme live; the theme tests and `scripts/theme-shots`
 exercise the browser views.
 
 ## Requirements
 
 - Omarchy with its shell plugins (`omarchy plugin add`, the bar and the
   `qs.Ui` / `qs.Commons` panel API).
-- `python3` and `git`. Atlas uses only the Python standard library.
+- `python3` and `git`. Markdown Atlas uses only the Python standard library.
 - A Chromium-based default browser for the reader, which Omarchy opens as a
   web app (`omarchy-launch-or-focus-webapp`).
 
@@ -50,14 +50,14 @@ ln -s ~/.config/omarchy/plugins/io.github.broken-branch.atlas/bin/atlas ~/.local
 The link puts `atlas` on your `PATH`. Without it, call the command by its
 full path: `~/.config/omarchy/plugins/io.github.broken-branch.atlas/bin/atlas`.
 
-The Atlas mark appears in the bar, and the plugin's service starts the
+The Markdown Atlas mark appears in the bar, and the plugin's service starts the
 reader's server on `127.0.0.1:4137`. Update with
 `omarchy plugin update io.github.broken-branch.atlas`. If an open shell still
 shows the old popup after an update, run `omarchy restart shell` once.
 
 ## First root
 
-Nothing is indexed until you add a root, a folder Atlas may read:
+Nothing is indexed until you add a root, a folder Markdown Atlas may read:
 
 ```sh
 atlas root-add ~/Projects
@@ -70,18 +70,18 @@ name need one. The popup's Roots page adds the same three ways: Whole system,
 A drive, or A path. `atlas roots` lists them and `atlas root-remove NAME`
 removes one; removing a root never touches its files.
 
-In a git repository Atlas lists files with `git ls-files`, so the project's
+In a git repository Markdown Atlas lists files with `git ls-files`, so the project's
 own ignore rules apply, and dates files from one Git history pass per root.
 Outside git it walks the folder, skips `node_modules`, `.venv`, `build` and similar
 directories, and uses the file's modification time.
 
-## Using Atlas
+## Using Markdown Atlas
 
-**Popup.** Click the Atlas mark in the bar, or run
+**Popup.** Click the Markdown Atlas mark in the bar, or run
 `omarchy-shell io.github.broken-branch.atlas toggle` (also `open` and
 `close`). The popup shows the roots, the findings (orphan files, dangling
 references, stale files), Recently edited, All files and the map. Pick a file to see its
-facts: kind, date, references in and out. Atlas sets no key binding; to add
+facts: kind, date, references in and out. Markdown Atlas sets no key binding; to add
 one, bind that command in `~/.config/hypr/bindings.lua`. Right-clicking the
 mark opens the selected file in the reader.
 
@@ -156,7 +156,7 @@ The visible handle restores a hidden top bar.
 
 Each collection command takes `--root NAME` for one registered root, or
 `--path DIR` to index a directory on the spot without reading or writing any
-Atlas state. Kinds (instructions, readmes, plans, logs and others) colour the
+Markdown Atlas state. Kinds (instructions, readmes, plans, logs and others) colour the
 map; `atlas kinds` lists them and `atlas kind-set` adds or changes one.
 `--json` gives programs one JSON object per call; the shapes are
 in [docs/contract.md](docs/contract.md).
@@ -179,7 +179,7 @@ prints an `unavailable` line for it instead.
 
 ### In CI
 
-Atlas needs only `python3` and `git`, so it runs in your own repository's CI
+Markdown Atlas needs only `python3` and `git`, so it runs in your own repository's CI
 without Omarchy. A GitHub Actions job:
 
 ```yaml
@@ -196,14 +196,14 @@ jobs:
 ```
 
 Run it from your repository's root; `--path .` indexes that checkout.
-`fetch-depth: 0` gives Atlas each file's real last-commit time, which `stale`
+`fetch-depth: 0` gives Markdown Atlas each file's real last-commit time, which `stale`
 compares. There is no exclude option, so `orphans` also reports test
 fixtures and other Markdown that is not meant to be linked; choose the
 checks that fit your repository.
 
 ## Stale files
 
-A doc is stale when a source it describes changed after the doc did. Atlas
+A doc is stale when a source it describes changed after the doc did. Markdown Atlas
 only measures this where you say what each doc depends on, in
 `docs/impact.yml` at the root of a project. Despite its name the file must
 be JSON:
@@ -221,7 +221,7 @@ Each rule pairs `source` globs with the `docs` globs that describe them,
 relative to the project root. A doc is stale when the newest file matching
 its rule's `source` is newer than the doc. Without the file, `stale` lists
 the root as unavailable with `impact map absent`; with invalid JSON, with
-`impact map unreadable`. Atlas never guesses a dependency.
+`impact map unreadable`. Markdown Atlas never guesses a dependency.
 
 ## Instruction cost
 
@@ -251,24 +251,28 @@ nested instruction files and Claude skills, agents and commands: an agent
 reads those when it needs them, so they are not added to the startup total.
 A file several agents read appears in each of their rows. Tokens are
 estimated as bytes ÷ 4 — an approximation, not a tokenizer count — and
-Atlas calls no model and needs no account.
+Markdown Atlas calls no model and needs no account.
 
-## What Atlas reads and writes
+## What Markdown Atlas reads and writes
 
-- **Roots, read-only.** Atlas reads files only inside the roots you
+- **Roots, read-only.** Markdown Atlas indexes files only inside the roots you
   register, and follows `@path` imports only inside those roots and your
-  home folder. Files that look like credentials (`.env`, keys and similar)
-  are never indexed or served.
+  home folder. The cost report also reads the agent files listed below.
+  Files that look like credentials (`.env`, keys and similar) are never
+  indexed or served.
 - **Its own state.** `~/.config/omarchy-atlas/config.json` holds your roots
-  and kinds; `~/.cache/omarchy-atlas/index.json` holds the index. Atlas
-  writes nothing else, and nothing into a project or the plugin folder.
+  and kinds; `~/.cache/omarchy-atlas/index.json` holds the index. Markdown Atlas
+  also keeps an owner-only server credential and short-lived browser launch
+  files in these Atlas directories. It writes nothing into a project or the
+  plugin folder.
 - **Agent files for cost.** `~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`,
   `~/.gemini/GEMINI.md` and `~/.claude/projects/*/memory/MEMORY.md`, read
   only for `atlas cost`.
 - **Theme.** The current Omarchy `colors.toml` and `shell.toml`, and
   `hyprctl` for corner rounding, so the reader matches the desktop.
-- **Server.** `127.0.0.1:4137`, local only, no accounts. It serves the
-  reader and files inside registered roots to programs on this computer.
+- **Server.** `127.0.0.1:4137`, local only, no accounts. It serves the reader
+  and files inside registered roots after checking the owner-only credential
+  or a port-bound browser token started by `atlas show`.
 - **No network.** No requests beyond `127.0.0.1`, no telemetry, no model
   calls.
 
@@ -280,7 +284,7 @@ Atlas calls no model and needs no account.
   exits, backing off to 30 s after five exits in a minute.
 - **Port 4137 is taken.** The server exits with a one-line reason in the
   shell's log and the service keeps retrying. Stop the other program on that
-  port (`ss -ltnp 'sport = :4137'` names it); Atlas starts on the next retry.
+  port (`ss -ltnp 'sport = :4137'` names it); Markdown Atlas starts on the next retry.
 - **A root moved or was deleted.** The other roots keep working; every
   command lists the missing one as `unavailable NAME root missing`, and
   `--root NAME` for it replies `invalid_root`. Restore the directory, or run
@@ -301,16 +305,16 @@ your roots and the index; the third removes the link, if you made one.
 
 ## Development
 
-Try Atlas on a demo workspace: run `sh scripts/demo-workspace OUT-DIR` and add the four generated projects as roots.
+Try Markdown Atlas on a demo workspace: run `sh scripts/demo-workspace OUT-DIR` and add the four generated projects as roots.
 
 ## Documentation
 
 - [Documentation index](docs/index.md): every document below in one list.
-- [Using Atlas](docs/features.md): the flow from first root to the map.
+- [Using Markdown Atlas](docs/features.md): the flow from first root to the map.
 - [CLI, index and server reference](docs/contract.md): commands, JSON
   shapes, HTTP routes, and the exact definitions of orphan, dangling, stale
   and cost.
-- [Stack](docs/stack.md): how Atlas is built and why.
+- [Stack](docs/stack.md): how Markdown Atlas is built and why.
 - [Contributing](CONTRIBUTING.md).
 
 ## License

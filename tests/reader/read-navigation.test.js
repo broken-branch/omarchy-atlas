@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const root = path.join(__dirname, '../..');
-const source = fs.readFileSync(path.join(root, 'reader/app.js'), 'utf8');
+const auth = fs.readFileSync(path.join(root, 'reader/auth.js'), 'utf8');
+const source = fs.readFileSync(path.join(root, 'reader/app.js'), 'utf8').replace('./auth.js', 'data:text/javascript;base64,' + Buffer.from(auth).toString('base64'));
 const app = import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 test('file picker scopes and searches path or title in stable root/path order', async () => {
@@ -61,7 +62,7 @@ test('reader and map key assignments preserve native inputs and retire brackets'
 
 test('reader shell names views and marks key hints as decorative', () => {
   const html = fs.readFileSync(path.join(root, 'reader/index.html'), 'utf8');
-  assert.match(html, /<title>Atlas Reader<\/title>/);
+  assert.match(html, /<title>Markdown Atlas Reader<\/title>/);
   assert.match(html, /id="toc" role="navigation"/);
   assert.match(html, /id="map-button" aria-keyshortcuts="m">Whole map <span aria-hidden="true">m/);
 });
@@ -164,7 +165,7 @@ async function navigationHarness(options = {}) {
     }}
   };
   vm.createContext(context);
-  vm.runInContext(source.replace(/export /g, '').replace("import('./map.js')", 'Promise.resolve(mapModuleStub)'), context);
+  vm.runInContext(source.replace(/^import \{authFetch, authEvents\} from .*\n/, 'const authFetch = fetch; const authEvents = url => new EventSource(url);\n').replace(/export /g, '').replace("import('./map.js')", 'Promise.resolve(mapModuleStub)'), context);
   await context.startApp();
   const settle = () => new Promise(resolve => setImmediate(resolve));
   return {node, history, instances, target, entries, bodyClasses, loadedLibraries, requests, focused:() => focused, async key(key) { listeners.keydown({key, target:node('reading'), preventDefault() {}, stopImmediatePropagation() {}}); await settle(); },

@@ -66,7 +66,8 @@ class PluginAssemblyTests(unittest.TestCase):
         panel = (ROOT / "Panel.qml").read_text(encoding="utf-8")
         content = (ROOT / "PanelContent.qml").read_text(encoding="utf-8")
         self.assertIn("readonly property var unavailableLabels: IndexModel.unavailableLabels(index.unavailable)", panel)
-        self.assertIn('unavailableLabels.length ? "Atlas: " + unavailableLabels.join(" · ")', panel)
+        self.assertIn('unavailableLabels.length ? "Markdown Atlas: " + unavailableLabels.join(" · ")', panel)
+        self.assertIn('Accessible.name: "Markdown Atlas"', panel)
         self.assertIn('text: atlas.unavailableLabels.join(" · ")', content)
         self.assertNotIn("Stale analysis unavailable", panel + content)
 

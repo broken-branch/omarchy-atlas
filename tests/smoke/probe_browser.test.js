@@ -4,7 +4,24 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {CDPClient, aggregate, main, sameMapView, selectTarget, settledMeasurement, shot, waitForSettle} = require('./probe_browser.js');
+const vm = require('node:vm');
+const {CDPClient, aggregate, main, sameMapView, selectTarget, settledMeasurement, shot, shownTarget, waitForSettle} = require('./probe_browser.js');
+
+test('target probe requires the requested document to render after show', async () => {
+  const expressions = [];
+  const title = {textContent:'Queued fixture'};
+  const context = {window:{atlasProbe:{view:'read', target:{root:'fixture', path:'NEXT.md'}}},
+    document:{getElementById(id) { return id === 'document-title' ? title : null; }}};
+  const client = {socket:{close() {}}, async evaluate(expression) {
+    expressions.push(expression);
+    return vm.runInNewContext(expression, context);
+  }};
+  assert.deepEqual(await shownTarget(client, 'fixture', 'NEXT.md', 'Queued fixture'), {root:'fixture', path:'NEXT.md', displayed:true});
+  title.textContent = 'File unavailable';
+  assert.equal(vm.runInNewContext(expressions[0], context), false, 'a selected route with a failed fetch must not pass');
+  title.textContent = 'Initial fixture';
+  assert.equal(vm.runInNewContext(expressions[0], context), false, 'the previous document must not pass');
+});
 
 const fixture = name => JSON.parse(fs.readFileSync(path.join(__dirname, '../fixtures/smoke', name), 'utf8'));
 
@@ -76,7 +93,7 @@ test('shot captures PNG bytes and restores device metrics', async () => {
   } finally { fs.rmSync(temp, {recursive:true, force:true}); }
 });
 
-test('recorded target list selects the Atlas page rather than a worker or another page', () => {
+test('recorded target list selects the Markdown Atlas page rather than a worker or another page', () => {
   const target = selectTarget(fixture('cdp-targets.json'));
   assert.equal(target.id, 'atlas');
   assert.equal(selectTarget([], 'http://missing/'), null);

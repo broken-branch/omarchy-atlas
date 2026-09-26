@@ -1068,10 +1068,10 @@ export function createMap(container, {onSelect, onRead, onEdit, onDetails = onSe
     if (pendingTarget) { status.textContent = `Target outside filters: ${pendingTarget.root}/${pendingTarget.path}. `; button('Reveal target', revealTarget, status); describeStatus(status.textContent + 'Reveal target'); return; }
     if (data.guarded) { status.textContent = `${data.fileCount} files: narrow roots to 2,000 or fewer to draw the map.`; describeStatus(status.textContent); return; }
     if (searching) { status.textContent = `${matchCount} ${matchCount === 1 ? 'match' : 'matches'} in visible files (path/title)`; describeStatus(status.textContent); return; }
-    element('span', '', `${scope ? 'Neighbourhood' : 'Atlas'} · ${plural(data.fileCount, 'file')} · ${plural(data.links.length, 'ref')} · `, status);
+    element('span', '', `${scope ? 'Neighbourhood' : 'Markdown Atlas'} · ${plural(data.fileCount, 'file')} · ${plural(data.links.length, 'ref')} · `, status);
     element('span', 'map-now', String(hotCount), status); element('span', '', ' in 30 min · ', status);
     element('span', 'map-today', String(warmCount), status); element('span', '', ' in 24 h', status);
-    describeStatus(`${scope ? 'Neighbourhood' : 'Atlas'} · ${plural(data.fileCount, 'file')} · ${plural(data.links.length, 'ref')} · ${hotCount} open in editor or edited within 30 min · ${warmCount} edited within 24 h`);
+    describeStatus(`${scope ? 'Neighbourhood' : 'Markdown Atlas'} · ${plural(data.fileCount, 'file')} · ${plural(data.links.length, 'ref')} · ${hotCount} open in editor or edited within 30 min · ${warmCount} edited within 24 h`);
   }
   function update() {
     layouts++; indexStartedAt = visible ? performance.now() : null; settleMs = null;

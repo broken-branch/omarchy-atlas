@@ -20,7 +20,7 @@ HTTP route changes.
   whole lifecycle. No installer, uninstaller, systemd unit, desktop entry or
   theme template: if a stock Omarchy command exists (`omarchy commands` lists
   them), use it.
-- Read-only over projects. Atlas writes only `~/.config/omarchy-atlas/` and
+- Read-only over projects. Markdown Atlas writes only `~/.config/omarchy-atlas/` and
   `~/.cache/omarchy-atlas/`. Nothing is indexed until the user adds a root.
 - Honest analysis. Orphan, dangling, stale and cost are defined in the
   contract. A reference style the indexer cannot see is a documented
@@ -106,7 +106,7 @@ of these you ran and what you looked at; if not, say that too.
 
 ## Security
 
-Atlas is local only and trusts processes on the same computer. Report a way
+Markdown Atlas is local only and trusts processes on the same computer. Report a way
 to read files outside registered roots, or to reach the server from another
 machine or from a web page, privately through GitHub private vulnerability
 reporting: "Report a vulnerability" on the repository's

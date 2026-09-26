@@ -6,7 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 const {spawn, spawnSync} = require('node:child_process');
-const {pageClient, waitFor, capture, sleep} = require('./theme-shots.js');
+const {pageClient, waitFor, capture, sleep, installFixtureToken} = require('./theme-shots.js');
 
 const project = path.resolve(__dirname, '..');
 const rootNames = ['harbor-api', 'lantern-ui', 'ledger-cli', 'field-notes'];
@@ -99,7 +99,8 @@ async function drag(client, point, dy) {
 }
 
 async function view(client, serverURL, out, size, scale, dependencies = {}) {
-  const index = await (await (dependencies.fetch || fetch)(`${serverURL}/api/index`)).json();
+  const token = dependencies.token || await installFixtureToken(client, serverURL, dependencies.configHome);
+  const index = await (await (dependencies.fetch || fetch)(`${serverURL}/api/index`, {headers:{Authorization:`Bearer ${token}`}})).json();
   const target = hub(index);
   const route = '/map/' + [target.root, ...target.path.split('/')].map(encodeURIComponent).join('/');
   try {
@@ -159,7 +160,7 @@ async function ready(url) {
     try { if ((await fetch(url)).ok) return; } catch { /* Server is starting. */ }
     await sleep(100);
   }
-  throw Error(`Atlas server did not start: ${url}`);
+  throw Error(`Markdown Atlas server did not start: ${url}`);
 }
 
 async function stop(child) {
@@ -188,10 +189,10 @@ async function main(args) {
     const serverPort = await freePort(), cdpPort = await freePort();
     const serverURL = `http://127.0.0.1:${serverPort}`;
     server = spawn('python3', ['-B', path.join(project, 'atlas.py'), 'serve', '--port', String(serverPort)], {env, stdio:'ignore'});
-    await ready(`${serverURL}/theme.css`);
+    await ready(`${serverURL}/app.js`);
     browser = spawn('chromium', ['--headless=new', '--no-first-run', `--user-data-dir=${path.join(home, 'chromium')}`, `--remote-debugging-port=${cdpPort}`, `--window-size=${size.width},${size.height}`, `--force-device-scale-factor=${scale}`, `${serverURL}/map`], {env, stdio:'ignore'});
     const client = await pageClient(`http://127.0.0.1:${cdpPort}`, serverURL);
-    const target = await view(client, serverURL, out, size, scale);
+    const target = await view(client, serverURL, out, size, scale, {configHome:env.XDG_CONFIG_HOME});
     process.stdout.write(`${out}: ${target.root}/${target.path}\n`);
   } finally {
     await stop(browser);

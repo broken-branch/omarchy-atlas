@@ -1,4 +1,4 @@
-"""The public demo exercises Atlas through its ad-hoc CLI root."""
+"""The public demo exercises Markdown Atlas through its ad-hoc CLI root."""
 
 from __future__ import annotations
 
@@ -131,7 +131,7 @@ class DemoWorkspaceTests(unittest.TestCase):
                               if path.startswith(f"{name}/docs/guides/")} for name in PROJECTS}
         self.assertEqual(len(set.union(*guide_names.values())), 30)
 
-        # Atlas's modified time is the contract's source for map recency.
+        # Markdown Atlas's modified time is the contract's source for map recency.
         files = [row for name in PROJECTS for row in self.cli("files", first / name)["files"]]
         ages = [NOW - dt.datetime.fromisoformat(row["modified"]).timestamp() for row in files]
         self.assertTrue(all(age >= 0 for age in ages))

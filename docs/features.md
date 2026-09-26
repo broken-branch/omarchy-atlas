@@ -1,4 +1,4 @@
-# Using Atlas
+# Using Markdown Atlas
 
 ## Primary flow
 
@@ -10,7 +10,7 @@
    short table and exit 1 when they have findings, so a repository can run
    one as a CI step; `atlas cost` prints its table and exits 0. `--json`
    gives programs the same data.
-3. Open the popup. The Atlas mark sits in the bar while the plugin is
+3. Open the popup. The Markdown Atlas mark sits in the bar while the plugin is
    enabled; click it or run
    `omarchy-shell io.github.broken-branch.atlas toggle`. Search paths, titles
    and content, pick a root, open a finding (orphan files, dangling
@@ -28,8 +28,8 @@
    row is Map · Edit · Details. `e` opens the file in the Omarchy default
    editor. The reader needs the server: the installed plugin's service keeps
    it running; from a plain checkout, run `python3 -B atlas.py serve` first.
-   With the server down, `atlas show` still opens the window, on a page that
-   cannot load.
+   `atlas show` starts the browser with a short-lived private file exchange;
+   when the server is down, the page cannot complete that exchange.
 5. See the neighbourhood, then the whole thing. `n` or Neighbourhood opens
    the map view on the full canvas scoped to the document: the file and one
    hop of incoming and outgoing references, the direct-reference list beside
@@ -53,11 +53,11 @@
 
 ## Behaviour and boundaries
 
-- Read-only over projects. Atlas never creates, edits, moves or renames a
+- Read-only over projects. Markdown Atlas never creates, edits, moves or renames a
   document, and never writes outside `~/.config/omarchy-atlas/` and
   `~/.cache/omarchy-atlas/`.
 - Definitions are the [reference's](contract.md#definitions). An orphan is a
-  file nothing refers to in any style Atlas can read; a dangling reference is
+  file nothing refers to in any style Markdown Atlas can read; a dangling reference is
   a Markdown link, wikilink or `@path` import with no target, within the
   [reference limits](contract.md#definitions); stale is measured only where
   `docs/impact.yml` ([format](../README.md#stale-files)) says what a doc

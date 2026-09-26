@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write four small, fictional projects for Atlas demonstrations."""
+"""Write four small, fictional projects for Markdown Atlas demonstrations."""
 
 from __future__ import annotations
 

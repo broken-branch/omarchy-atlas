@@ -45,13 +45,14 @@ docs/ tests/ scripts/
   clipboard watchers. The kernel kills the server with the shell; disabling
   the plugin stops it.
 - **Backend**: Python 3 standard library, entry `atlas.py`, sibling modules
-  `atlas_index.py`, `atlas_analyze.py`, `atlas_serve.py`. The panel invokes it
+  `atlas_index.py`, `atlas_analyze.py`, `atlas_auth.py`, `atlas_serve.py`. The panel invokes it
   as an argv array through `Quickshell.Io.Process`, one request per process,
   one JSON line on stdout — exactly as first-party panels call `omarchy-*`
   scripts. `bin/atlas` is a two-line wrapper for people and CI.
 - **Server**: `atlas.py serve`, `http.server` on `127.0.0.1:4137`. Serves the
   reader, index JSON, raw files inside roots, a theme stylesheet and an SSE
-  event stream. Re-indexes lazily (contract).
+  event stream. It checks the owner credential or browser session before
+  serving requests and re-indexes lazily (contract).
 - **Reader**: static HTML/CSS/JS in `reader/`, shown by
   `omarchy-launch-or-focus-webapp` in a Chromium `--app=` window. Markdown by
   `markdown-it`, code and Mermaid source by `highlight.js`, the map by
@@ -79,9 +80,9 @@ JSON, its services supervise children with `setpriv --pdeathsig`, and its
 plugin lifecycle is `git clone` plus a manifest check. Python is what Omarchy
 reaches for when bash can no longer hold the structure
 (`omarchy-agent-usage-*`, `omarchy-file-select`). Everything is text that
-hot-reloads. Building Atlas in the same materials means an Omarchy user can
+hot-reloads. Building Markdown Atlas in the same materials means an Omarchy user can
 read all of it, `omarchy plugin update` is the upgrade path, and an Omarchy
-update cannot break a toolchain Atlas does not have.
+update cannot break a toolchain Markdown Atlas does not have.
 
 Rich rendering belongs in the browser, which is how Omarchy delivers its own
 manual and ships HEY, Basecamp and the rest as web apps. The shell process
@@ -105,10 +106,10 @@ safer for being compiled.
   theme `.tpl` of our own. Each reinvents a stock command and prevents
   `omarchy plugin add/update/remove` from managing the plugin directly.
 - **Obsidian as the tool.** Its graph sees only Markdown links and wikilinks,
-  while Atlas also indexes path references and impact rules; it
+  while Markdown Atlas also indexes path references and impact rules; it
   cannot run in CI; its conventions (wikilinks, a notes vault, rename-with-
   rewrite) drift docs away from what agents read. It remains a fine reader;
-  Atlas does not depend on it.
+  Markdown Atlas does not depend on it.
 - **Markdown rendered in QML rich text.** No highlighting, an HTML-4-era
   subset, slow for long documents.
 - **QtWebEngine inside the plugin.** Not initialised by quickshell; cannot be
@@ -132,7 +133,7 @@ safer for being compiled.
   hiding `log` by default keep several hundred nodes legible, and the whole
   map is where unlinked and broken files show.
 - **A floating window for the native surface.** Every first-party Omarchy
-  plugin uses a bar widget with a popup; Atlas does the same.
+  plugin uses a bar widget with a popup; Markdown Atlas does the same.
 - **Configurable exclude lists or ports.** No implemented feature needs
   them. Fixed values live in the contract; kinds are the one user-owned
   table (`kinds`, `kind-set`, `kind-remove`).

@@ -180,7 +180,7 @@ function recorder() {
   });
 }
 
-// A small host/engine boundary harness: tests Atlas callbacks and lifecycle,
+// A small host/engine boundary harness: tests Markdown Atlas callbacks and lifecycle,
 // not browser canvas rendering or force-graph's own layout implementation.
 function host() {
   const listeners = new Map();
@@ -830,8 +830,8 @@ test('Recent sits beside Kinds, keeps open and 24 h files, counts them in the st
       const status = h.all().find(el => el.className === 'map-status'), recent = row('recent');
       const siblings = recent.parentNode.children;
       assert.equal(siblings[siblings.indexOf(recent) + 1].tagName, 'details', 'Recent is the control beside Kinds');
-      assert.equal(text(status), 'Atlas · 4 files · 5 refs · 2 in 30 min · 1 in 24 h');
-      assert.equal(status.title, 'Atlas · 4 files · 5 refs · 2 open in editor or edited within 30 min · 1 edited within 24 h');
+      assert.equal(text(status), 'Markdown Atlas · 4 files · 5 refs · 2 in 30 min · 1 in 24 h');
+      assert.equal(status.title, 'Markdown Atlas · 4 files · 5 refs · 2 open in editor or edited within 30 min · 1 edited within 24 h');
       assert.equal(status.attributes['aria-label'], status.title);
       assert.deepEqual(status.children.filter(el => el.className).map(el => [el.className, el.textContent]), [['map-now', '2'], ['map-today', '1']], 'the numbers carry the ring colours');
       assert.equal(count('recent'), '3');
@@ -1174,7 +1174,7 @@ test('when a minute passes, the status line, the Recent count and the Recent fil
       search.value = 'README'; search.oninput();
       assert.equal(text(status), '1 match in visible files (path/title)');
       results.value = results.children[0].value; results.onchange();
-      assert.match(text(status), /^Atlas · 3 files · .* · 2 in 30 min · 1 in 24 h$/, 'choosing the result restores the status line');
+      assert.match(text(status), /^Markdown Atlas · 3 files · .* · 2 in 30 min · 1 in 24 h$/, 'choosing the result restores the status line');
       let searches = 0;
       const replace = results.replaceChildren.bind(results);
       results.replaceChildren = (...args) => { searches++; replace(...args); };
@@ -1186,7 +1186,7 @@ test('when a minute passes, the status line, the Recent count and the Recent fil
       assert.equal(recentCount(), '3');
       advance(61 * 60e3); frame();
       assert.deepEqual(h.data().nodes.filter(n => n.type === 'file').map(n => n.file.path), ['README.md', 'loose.md'], 'the filter drops guide.md after 24 h');
-      assert.match(text(status), /^Atlas · 2 files · .* · 1 in 30 min · 1 in 24 h$/);
+      assert.match(text(status), /^Markdown Atlas · 2 files · .* · 1 in 30 min · 1 in 24 h$/);
       assert.equal(recentCount(), '2');
     });
   });

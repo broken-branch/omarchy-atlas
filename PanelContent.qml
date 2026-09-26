@@ -15,7 +15,7 @@ Column {
     spacing: Style.space(12)
     PanelHero {
         width: parent.width
-        title: "Atlas"
+        title: "Markdown Atlas"
         meta: atlas.index.roots.length + " roots · " + atlas.index.files.length + " files · " + (atlas.indexedAt || "not indexed")
         foreground: atlas.bar ? atlas.bar.foreground : Color.foreground
         fontFamily: atlas.bar ? atlas.bar.fontFamily : Style.font.family

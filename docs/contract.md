@@ -78,7 +78,7 @@ when its request generation is current.
 | `stale [--root NAME]` | `{stale:[Stale], unavailable:[{root,path?:REL,reason}]}` |
 | `cost [--root NAME]` | `{roots:[Cost], unavailable:[{root,path?:REL,reason}]}`; text output gives each row's startup total, then its startup files, largest first |
 | `search QUERY [--root NAME]` | `{matches:[{file:File, line:N, text:"…"}], unavailable:[{root,path?:REL,reason}]}`; case-insensitive substring over paths, titles and content, first 200 matches; one row per matching content line, and a path/title-only match uses `line:0` with the matched metadata text. Content above 2 MB is not searched; its path/title can still match, and `unavailable` names the file with `content exceeds 2 MB`. |
-| `show --root NAME --path REL [--map]` | `{clients:N}`; POSTs `/api/show` with `view` `read` or `map`; if the server is up with 0 clients, or down, launches the window at `/read/NAME/REL` or `/map/NAME/REL` with argv `["omarchy-launch-or-focus-webapp", "Atlas Reader", URL]` — the stock command takes a window pattern before the URL and matches it against window class or title; the reader's document title is `Atlas Reader` (the native popup uses a shell layer, so the two never match each other) and the pattern focuses the open app window instead of launching a second |
+| `show --root NAME --path REL [--map]` | `{clients:N}`; bearer-authenticated POST `/api/show` with `view` `read` or `map`; if there are no reader clients, launches `["omarchy-launch-or-focus-webapp", "Markdown Atlas Reader", "file:///.../bootstrap-<nonce>.html"]`. The private file auto-posts a one-use exchange for `/read/NAME/REL` or `/map/NAME/REL`. The window pattern matches the reader title and focuses an existing window. The browser token survives a same-port server restart, so the open reader reconnects and receives later `show` events. |
 | `edit --root NAME --path REL` | `{opened:true}`; runs `omarchy-launch-editor <abs>` |
 | `serve` | long-running, started by `Service.qml`; `--port` for tests only; port 0 binds an ephemeral port and prints its number on stdout before serving |
 
@@ -88,7 +88,7 @@ root after canonicalisation, else `outside_roots`. `index` uses `git ls-files
 git call runs as `git --no-pager -c core.fsmonitor=false -c
 log.showSignature=false`, and `git log` adds `--no-show-signature
 --no-ext-diff --no-textconv`, so a repository's own config cannot run a
-command while Atlas indexes), else a
+command while Markdown Atlas indexes), else a
 walk excluding `.git node_modules .venv venv .terraform .pytest_cache
 __pycache__ dist build coverage test-results .cache`. The walk:
 lists any directory it meets that contains `.git` with the same `git
@@ -123,7 +123,7 @@ resolves outside the root is not indexed. A document larger than 2 MB is
 indexed from `stat` without being read: `bytes` is its size, `title` is the
 basename, `lines` is 0 and it has no outbound references. Name-based denial
 cannot identify a hardlink with an allowed name to a credential file: a user
-who creates such a hardlink inside a root can expose its bytes through Atlas.
+who creates such a hardlink inside a root can expose its bytes through Markdown Atlas.
 
 ## Shapes
 
@@ -386,20 +386,70 @@ is addressed as that byte (`%FF`), matching the index's path. Containment is
 decided without requiring the target to exist: an in-root path that is
 absent (deleted) is 404 with `not_found`, never 403. `/api/file` and
 `/raw/` refuse a file over 2 MB with 413 from its size, before reading it.
-Unknown routes 404. No caching headers beyond `ETag` on `/api/file` and
-`/raw/`.
+Unknown authenticated routes return 404. Sensitive responses are `no-store`;
+`ETag` remains on `/api/file` and `/raw/` for conditional requests.
 
 | Route | Returns |
 | --- | --- |
 | `GET /`, `GET /read/<root>/<path>`, `GET /map`, `GET /map/<root>/<path>` | the app (`reader/index.html`); it reads view and target from the location |
-| `GET /app.js`, `/app.css`, `/map.js`, `/map.css`, `/vendor/<file>` | static files from `reader/` |
+| `GET /app.js`, `/auth.js`, `/app.css`, `/map.js`, `/map.css`, `/vendor/<file>` | static files from `reader/` |
 | `GET /theme.css` | Palette/control CSS properties from the theme inputs below; neutral dark fallback when absent |
 | `GET /api/index` | `index` (rebuilt first if older than 2 s); 503 with the rebuild error when refresh fails, including when a previous index is retained internally |
 | `GET /api/file?root=&path=` | `{file:File, content, cost:[Cost], references:{inbound:[Reference], outbound:[Reference]}}`; `cost` holds the file's root/agent cost rows (the `cost --json` shape) whose `startup` lists it, when it is an `instruction`-kind file, else `[]`, and is also `[]` when a cost input cannot be read (the file still loads); non-UTF-8 content returns `binary:true, bytes` instead of `content`; over 2 MB is 413 |
 | `GET /raw/<root>/<path>` | the file bytes, with a fixed content-type table keyed by the suffix of the file the path resolves to, for images (`.png .jpg .jpeg .gif .svg .webp`) anywhere in a root and for indexed files of type `.md .mmd .mermaid .txt .json .yml .yaml .toml .csv`; a non-indexed non-image file is 404 `document is not indexed`; other extensions 404; sandbox CSP above |
 | `GET /api/events` | `text/event-stream`: `index` (semantic index changed, a failed refresh recovered, or more than 16 file fingerprints changed), `index-error` (`{error,generatedAt}` when refresh fails after a successful index), `file` (`{root,path}` whose content/existence changed in a refresh of at most 16 files), `theme` (effective theme changed), `show` (`{root,path,view}`) |
-| `POST /api/show` | body `{root,path,view:"read"\|"map"}`; broadcasts `show`; returns `{clients:N}` |
+| `POST /api/show` | body `{root,path,view:"read"\|"map"}`; broadcasts `show` or queues it for the next authenticated reader if none is connected; returns `{clients:N}` |
 | `POST /api/edit` | body `{root,path}`; runs `omarchy-launch-editor <abs>`; returns `{opened:true}` |
+
+API, theme, `/raw/` and SSE routes require authentication before index, path
+or launcher work. Generic pages and static assets require Host validation and
+do not read indexed state. The server checks an exact
+loopback Host on its bound port first. The CLI sends `Authorization: Bearer`
+with the 256-bit credential in `~/.config/omarchy-atlas/server-secret`.
+`atlas serve` creates it with exclusive `0600` creation in an owner-only
+`0700` directory. Existing Atlas-owned directories and files are narrowed to
+`0700` and `0600`; wrong-owner, non-regular and symlinked state is rejected.
+XDG parent modes are untouched. A browser token is HMAC-derived from the
+owner credential and bound to the server's exact loopback port. Missing or
+invalid credentials return 401 without indexing or side effects. Sensitive
+responses use `Cache-Control: no-store`, `Referrer-Policy: no-referrer`,
+`nosniff`, and the route's frame/raw CSP.
+
+`POST /auth/bootstrap` is the only unauthenticated state-changing route. A
+`file://` page stored as `0600` under `~/.cache/omarchy-atlas/`
+auto-submits a bounded form with a random nonce, 30-second expiry, target
+route and HMAC-SHA256 over those fields. There is no secret in launcher argv,
+the URL or browser history. The server checks the HMAC in constant time,
+rejects replay and expiry, validates an indexed target, and returns a page
+that stores the browser token in origin-scoped `sessionStorage` before replacing
+the page with the target route. The redeemed file is removed; expired files
+are pruned by the running server. Browser-authenticated actions require an
+exact same-origin `Origin` and same-origin fetch site. CLI actions may omit
+Origin, but a supplied Origin must match. Existing Host,
+JSON, raw sandbox and registered-root checks still apply. Reader API, SSE,
+theme and raw image requests use `Authorization` from the token; the page
+shell and vendored static assets are generic and public after Host validation.
+They do not read an index or embed private state. An open reader reconnects
+after a same-port server restart. A different port rejects its token.
+
+`ATLAS_SERVER_URL` is for fixture tests: it must be a `127.0.0.1` HTTP origin
+and requires a separate `ATLAS_TEST_SERVER_SECRET` hex credential. The
+production credential is never sent to an override or unexpected port.
+A same-UID process and root remain outside the local-account
+boundary. Desktop bootstrap proof is provided by the fixture-only
+`scripts/probe-browser-bootstrap`; it does not install the plugin or use a
+live registered root. The probe starts a separate server process on a fixture
+port, stops it, verifies the socket closes, and starts a new process on that
+port with a queued `show` target. It records only the process ID and target
+when the reconnected reader takes that event from the queue. It checks that
+the same stock browser window remains and that authenticated SSE accepts a
+later `show`. With `--other-uid USER` it also checks HTTP 401 and denial of
+the fixture credential file. It closes only the window it created.
+
+`scripts/preview` and `scripts/theme-shots` pass their isolated fixture
+config directory explicitly to capture code. Capture accepts only a
+`127.0.0.1` HTTP origin with an explicit port and never reads the parent
+process's default credential path.
 
 Lazy re-index: after 2 s, compare a cheap signature of candidate paths and
 their mtime/size, config, each Git root's HEAD and index mtime, impact map,
@@ -470,7 +520,7 @@ not render diagrams.
 `["bar-widget","service"]`, `entryPoints` `{"barWidget":"Panel.qml",
 "service":"Service.qml"}`, `barWidget.defaultSection` `"right"`. The bar
 widget's IPC target is the plugin id: `omarchy-shell io.github.broken-branch.atlas
-open|close|toggle`. Opening from a key is the user's own binding: Atlas
+open|close|toggle`. Opening from a key is the user's own binding: Markdown Atlas
 sets and installs none, and the README names the command to bind and where
 (`~/.config/hypr/bindings.lua`).
 

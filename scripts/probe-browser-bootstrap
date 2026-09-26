@@ -1,0 +1,216 @@
+#!/usr/bin/env python3
+"""Desktop-only fixture probe for stock Chrome bootstrap and process restart."""
+
+from __future__ import annotations
+
+import http.client
+import json
+import os
+import shlex
+from pathlib import Path
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+import atlas_auth
+import atlas_index
+import atlas_serve
+
+
+def serve_fixture() -> None:
+    """Fixture server child; record only the queued target and process identity."""
+    port = int(os.environ["ATLAS_PROBE_PORT"])
+    with atlas_serve.create_server(port=port, rounding_command=None) as server:
+        target = json.loads(os.environ.get("ATLAS_PROBE_QUEUED_SHOW", "null"))
+        if target is not None:
+            assert server.state.deliver_show(target) == 0
+            original = server.state.add_client
+            def add_client():
+                was_pending = server.state.pending_show == target
+                client = original()
+                if was_pending:
+                    get = client.get
+                    def recorded_get(*args, **kwargs):
+                        event = get(*args, **kwargs)
+                        if event[0] == "show" and event[1] == target:
+                            Path(os.environ["ATLAS_PROBE_RECEIPT"]).write_text(
+                                json.dumps({"pid": os.getpid(), "target": target}) + "\n", encoding="utf-8")
+                        return event
+                    client.get = recorded_get
+                return client
+            server.state.add_client = add_client
+        server.serve_forever(poll_interval=0.2)
+
+
+def windows() -> set[str]:
+    result = subprocess.run(["hyprctl", "clients", "-j"], text=True, capture_output=True, check=True)
+    return {row["address"] for row in json.loads(result.stdout)
+            if "Markdown Atlas Reader" in row.get("title", "")}
+
+
+def wait_for(predicate, label: str, seconds: float = 15) -> None:
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        if predicate():
+            return
+        time.sleep(0.1)
+    raise RuntimeError(label)
+
+
+def status(port: int) -> int | None:
+    try:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=0.3)
+        connection.request("GET", "/app.js")
+        response = connection.getresponse()
+        response.read()
+        return response.status
+    except OSError:
+        return None
+    finally:
+        if "connection" in locals():
+            connection.close()
+
+
+def main() -> int:
+    if len(sys.argv) == 2 and sys.argv[1] == "--serve-fixture":
+        serve_fixture()
+        return 0
+    if len(sys.argv) not in (1, 3) or (len(sys.argv) == 3 and sys.argv[1] != "--other-uid"):
+        print("usage: probe-browser-bootstrap [--other-uid USER]", file=sys.stderr)
+        return 2
+    for name in ("omarchy-launch-or-focus-webapp", "hyprctl", "node"):
+        if shutil.which(name) is None:
+            print(f"unavailable: {name} is absent", file=sys.stderr)
+            return 2
+    previous = windows()
+    opened: set[str] = set()
+    server = None
+    with tempfile.TemporaryDirectory(prefix="atlas-bootstrap-probe-") as temporary:
+        base = Path(temporary)
+        root = base / "root"
+        root.mkdir(mode=0o700)
+        (root / "AGENTS.md").write_text("# Initial fixture\n", encoding="utf-8")
+        (root / "NEXT.md").write_text("# Queued fixture\n", encoding="utf-8")
+        config = base / "config/omarchy-atlas/config.json"
+        atlas_index.write_config(atlas_index.add_root({"version": 1, "roots": []}, root, "fixture"), config)
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            cdp_port = listener.getsockname()[1]
+        launchers = base / "bin"
+        launchers.mkdir()
+        launcher = launchers / "omarchy-launch-or-focus-webapp"
+        launcher.write_text("#!/bin/sh\nexec " + shlex.quote(shutil.which(launcher.name)) + ' "$@" ' +
+                            shlex.join([f"--remote-debugging-port={cdp_port}", f"--user-data-dir={base / 'chromium'}"]) + "\n")
+        launcher.chmod(0o700)
+        receipt = base / "queued-receipt.json"
+        env = {**os.environ, "HOME": str(base), "XDG_CONFIG_HOME": str(base / "config"),
+               "XDG_CACHE_HOME": str(base / "cache"), "ATLAS_SERVER_URL": f"http://127.0.0.1:{port}",
+               "ATLAS_PROBE_PORT": str(port), "ATLAS_PROBE_RECEIPT": str(receipt)}
+        env.update(PATH=str(launchers) + os.pathsep + env["PATH"],
+                   ATLAS_CDP=f"http://127.0.0.1:{cdp_port}", ATLAS_PAGE_PREFIX=f"http://127.0.0.1:{port}/")
+        def start(queued=None):
+            child_env = {**env, "ATLAS_PROBE_QUEUED_SHOW": json.dumps(queued)}
+            child = subprocess.Popen([sys.executable, "-B", __file__, "--serve-fixture"],
+                                     env=child_env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            wait_for(lambda: status(port) == 200 or child.poll() is not None, "fixture server did not start")
+            if child.poll() is not None:
+                raise RuntimeError(f"fixture server exited: {child.returncode}")
+            return child
+        def stop(child):
+            child.terminate()
+            child.wait(timeout=5)
+            wait_for(lambda: status(port) is None, "fixture server socket remained open after process exit", 3)
+        def show(path: str) -> int:
+            command = [sys.executable, "-B", str(ROOT / "atlas.py"), "show", "--root", "fixture",
+                       "--path", path, "--json"]
+            result = subprocess.run(command, env=env, text=True, capture_output=True, timeout=15)
+            reply = json.loads(result.stdout) if result.stdout else {}
+            if result.returncode or not reply.get("ok"):
+                raise RuntimeError("fixture show failed: " + result.stderr.strip())
+            return reply["data"]["clients"]
+        def clients(path: str) -> int:
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+            body = json.dumps({"root": "fixture", "path": path, "view": "read"})
+            try:
+                connection.request("POST", "/api/show", body,
+                                   {"Content-Type": "application/json",
+                                    "Authorization": "Bearer " + env["ATLAS_TEST_SERVER_SECRET"]})
+                response = connection.getresponse()
+                data = response.read()
+                if response.status != 200:
+                    raise RuntimeError(f"fixture show status: {response.status}")
+                return json.loads(data)["clients"]
+            finally:
+                connection.close()
+        try:
+            server = start()
+            env["ATLAS_TEST_SERVER_SECRET"] = atlas_auth.server_secret(
+                atlas_auth.secret_path(config)).hex()
+            assert show("AGENTS.md") == 0
+            wait_for(lambda: bool(windows() - previous), "fixture reader window did not open")
+            opened = windows() - previous
+            if len(opened) != 1:
+                raise RuntimeError(f"expected one fixture window, found {len(opened)}")
+            wait_for(lambda: clients("AGENTS.md") > 0, "browser did not connect authenticated SSE")
+            wait_for(lambda: not list((base / "cache/omarchy-atlas").glob("bootstrap-*.html")),
+                     "browser did not redeem the private bootstrap")
+            print("private bootstrap, reader and authenticated SSE: passed")
+            old_pid = server.pid
+            stop(server)
+            server = None
+            target = {"root": "fixture", "path": "NEXT.md", "view": "read"}
+            server = start(target)
+            if server.pid == old_pid:
+                raise RuntimeError("fixture server did not restart as a new process")
+            wait_for(receipt.exists, "open reader did not reconnect for queued show target")
+            recorded = json.loads(receipt.read_text(encoding="utf-8"))
+            if recorded != {"pid": server.pid, "target": target}:
+                raise RuntimeError("queued show target was not delivered to restarted process reader")
+            if windows() - previous != opened:
+                raise RuntimeError("queued show opened or replaced the fixture window")
+            displayed = subprocess.run(
+                ["node", str(ROOT / "tests/smoke/probe_browser.js"), "target", "fixture", "NEXT.md", "Queued fixture"],
+                env=env, text=True, capture_output=True, timeout=12)
+            if displayed.returncode:
+                raise RuntimeError("reader did not display NEXT.md after restart: " + displayed.stdout.strip())
+            result = json.loads(displayed.stdout)
+            if result != {"probe": "browser-target", "root": "fixture", "path": "NEXT.md", "displayed": True}:
+                raise RuntimeError("reader display probe returned an unexpected target")
+            wait_for(lambda: clients("NEXT.md") > 0, "reader did not keep authenticated SSE after restart")
+            print("new server process, queued show target displayed in the same reader window, authenticated SSE: passed")
+            if len(sys.argv) == 3:
+                account = sys.argv[2]
+                prefix = ["runuser", "-u", account, "--"] if os.geteuid() == 0 else ["sudo", "-n", "-u", account]
+                request = [sys.executable, "-c", "import urllib.request,urllib.error,sys\n"
+                           "try: urllib.request.urlopen(sys.argv[1]); sys.exit(1)\n"
+                           "except urllib.error.HTTPError as e: sys.exit(0 if e.code == 401 else 1)",
+                           f"http://127.0.0.1:{port}/api/index"]
+                denial = subprocess.run(prefix + request, capture_output=True, text=True, timeout=10)
+                if denial.returncode:
+                    raise RuntimeError("separate-UID HTTP denial failed or account switch unavailable: " + denial.stderr.strip())
+                file_check = subprocess.run(prefix + ["test", "-r", str(atlas_auth.secret_path(config))],
+                                            capture_output=True, timeout=10)
+                if file_check.returncode != 1:
+                    raise RuntimeError("separate-UID credential file denial failed")
+                print("separate-UID HTTP and credential file denial: passed")
+            else:
+                print("separate-UID denial: unavailable (pass --other-uid USER)")
+            return 0
+        finally:
+            if server is not None and server.poll() is None:
+                stop(server)
+            for address in opened & windows():
+                subprocess.run(["hyprctl", "dispatch", f'hl.dsp.window.close({{ window = "address:{address}" }})'],
+                               capture_output=True, timeout=5)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

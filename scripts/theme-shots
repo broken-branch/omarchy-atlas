@@ -70,18 +70,18 @@ for entry in $themes; do
   for root in "$@"; do python3 -B "$project/atlas.py" root-add "$root" >/dev/null; done
   server_port=$(port); cdp_port=$(port); server_url=http://127.0.0.1:$server_port
   python3 -B "$project/atlas.py" serve --port "$server_port" >"$home/server.log" 2>&1 & server_pid=$!
-  python3 - "$server_url/theme.css" <<'PYTHON'
+  python3 - "$server_url/app.js" <<'PYTHON'
 import sys, time, urllib.error, urllib.request
 for _ in range(100):
     try:
         with urllib.request.urlopen(sys.argv[1], timeout=0.2) as response:
             if response.status == 200: break
     except (OSError, urllib.error.URLError): time.sleep(0.1)
-else: raise SystemExit('Atlas server did not start')
+else: raise SystemExit('Markdown Atlas server did not start')
 PYTHON
   chromium --headless=new --no-first-run --user-data-dir="$home/chromium" --remote-debugging-port="$cdp_port" --window-size="${size%x*},${size#*x}" --force-device-scale-factor="$scale" "$server_url/map" >"$home/chromium.log" 2>&1 & browser_pid=$!
   expected=$(python3 -c 'import sys,tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["background"])' "$theme_dir/colors.toml")
-  node "$project/scripts/theme-shots.js" "$theme" "$expected" "$server_url" "http://127.0.0.1:$cdp_port" "$out" "$size" "$scale" "$read_target" "$@" >> "$rows"
+  node "$project/scripts/theme-shots.js" --config-home "$XDG_CONFIG_HOME" "$theme" "$expected" "$server_url" "http://127.0.0.1:$cdp_port" "$out" "$size" "$scale" "$read_target" "$@" >> "$rows"
   kill "$browser_pid" 2>/dev/null || :; wait "$browser_pid" 2>/dev/null || :; browser_pid=
   kill "$server_pid" 2>/dev/null || :; wait "$server_pid" 2>/dev/null || :; server_pid=
   IFS='

@@ -1,3 +1,4 @@
+import {authFetch, authEvents} from './auth.js';
 const escapeHTML = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[c]));
 export const sameTarget = (a, b) => !!a && !!b && a.root === b.root && a.path === b.path;
 // The server names a filename byte that is not UTF-8 as a lone surrogate
@@ -200,15 +201,28 @@ export function renderFile(data, target, render) {
     : render(data.content, target, data.references.outbound);
 }
 
+export async function inertImageBlob(blob) {
+  if (!/^image\/svg\+xml(?:;|$)/i.test(blob.type)) return blob;
+  if (typeof createImageBitmap !== 'function') throw Error('SVG image conversion is unavailable');
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width; canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    return await new Promise((resolve, reject) => canvas.toBlob(image => image ? resolve(image) : reject(Error('SVG image conversion failed')), 'image/png'));
+  } finally { bitmap.close(); }
+}
+export async function createImageURL(blob) {
+  return URL.createObjectURL(await inertImageBlob(blob));
+}
+
 export async function replaceTheme(document, afterLoad) {
   const old = document.getElementById('theme');
-  const next = document.createElement('link');
-  next.rel = 'stylesheet'; next.href = `/theme.css?refresh=${Date.now()}`;
-  await new Promise((resolve, reject) => {
-    next.onload = resolve;
-    next.onerror = () => { next.remove(); reject(Error('Theme unavailable; retaining previous theme')); };
-    old.after(next);
-  });
+  const response = await authFetch(`/theme.css?refresh=${Date.now()}`);
+  if (!response.ok) throw Error('Theme unavailable; retaining previous theme');
+  const next = document.createElement('style');
+  next.textContent = await response.text();
+  old.after(next);
   old.remove(); next.id = 'theme';
   await afterLoad();
 }
@@ -290,8 +304,8 @@ export async function startApp() {
   window.atlasProbe = {get view() { return route.view; }, get target() { return selected && {...selected}; }, theme() { return probeTheme(getComputedStyle(document.documentElement)); }, get map() { return map?.probe?.() || blankProbe; }};
   const message = (text = '', retry = false) => { $('status').textContent = text; $('retry').hidden = !retry; };
   async function request(url, options) {
-    const response = await fetch(url, options);
-    if (!response.ok) { const body = await response.json().catch(() => ({})); const error = Error(body.error || `HTTP ${response.status}`); error.status = response.status; throw error; }
+    const response = await authFetch(url, options);
+    if (!response.ok) { const body = await response.json().catch(() => ({})); const error = Error(response.status === 401 ? 'Reader access expired. Run atlas show to reopen the reader.' : body.error || `HTTP ${response.status}`); error.status = response.status; throw error; }
     return response.json();
   }
   const position = () => ({x:$('reading').scrollLeft, y:$('reading').scrollTop});
@@ -398,6 +412,14 @@ export async function startApp() {
       const result = renderFile(data, target, render);
       $('document-title').textContent = data.file.title;
       $('document').innerHTML = result.html;
+      for (const image of $('document').querySelectorAll('img[src^="/raw/"]')) {
+        const response = await authFetch(image.getAttribute('src'));
+        if (response.ok) {
+          try { image.src = await createImageURL(await response.blob()); }
+          catch { image.removeAttribute('src'); }
+        }
+        else image.removeAttribute('src');
+      }
       if (result.headings[0]?.level === 1) { $('document').querySelector('h1')?.remove(); result.headings[0].id = 'document-title'; }
       $('metadata').innerHTML = metadataHTML(data);
       $('toc').innerHTML = result.headings.map(h => `<a href="#${encodeURIComponent(h.id)}" style="padding-inline-start:${h.level - 1}ch">${escapeHTML(h.title)}</a>`).join('');
@@ -571,9 +593,9 @@ export async function startApp() {
   window.addEventListener('popstate', async event => {
     const state = event.state?.atlas ? event.state : null; route = state?.route || parseRoute(location.href); visitIndex = state?.atlasIndex ?? visitIndex; await display(state); historyButtons();
   });
-  const events = new EventSource('/api/events');
+  const events = authEvents('/api/events');
   events.addEventListener('open', refresh);
-  events.addEventListener('error', () => message('Server disconnected; reconnecting. Previous results retained.', true));
+  events.addEventListener('error', () => message('Server disconnected. Reconnecting; previous results retained.', true));
   events.addEventListener('index', refresh);
   events.addEventListener('index-error', event => { const failure = JSON.parse(event.data); indexFailure = failure.error; message(`${failure.error} · Retaining index from ${failure.generatedAt || 'last successful refresh'}`, true); });
   events.addEventListener('file', event => { const target = JSON.parse(event.data); if (route.view === 'read' && sameTarget(target, route.target)) loadRead(position()); });
@@ -582,6 +604,7 @@ export async function startApp() {
   events.addEventListener('theme', reloadTheme);
   const recencyTimer = setInterval(updateRecency, 30000);
   window.addEventListener('pagehide', () => { clearInterval(recencyTimer); events.close(); map?.destroy(); }, {once:true});
+  reloadTheme();
   await display(history.state); await refresh();
 }
 if (typeof window !== 'undefined') window.addEventListener('DOMContentLoaded', () => startApp().catch(error => { document.getElementById('status').textContent = `Reader unavailable: ${error.message}`; }));

@@ -129,7 +129,7 @@ Panel {
         now: recencyNow
     }, searchMatches)
     readonly property var visibleSearchMatches: IndexModel.filterMatches(searchMatches, visibleFiles, findings.recent === true)
-    readonly property string barStatus: (refreshError !== "" ? "Atlas: " + refreshError : unavailableLabels.length ? "Atlas: " + unavailableLabels.join(" · ") : "Atlas: " + index.files.length + " files in " + index.roots.length + " roots · indexed " + (indexedAt || "not yet")) + (IndexModel.barRecency(recencyCounts) ? " · " + IndexModel.barRecency(recencyCounts) : "")
+    readonly property string barStatus: (refreshError !== "" ? "Markdown Atlas: " + refreshError : unavailableLabels.length ? "Markdown Atlas: " + unavailableLabels.join(" · ") : "Markdown Atlas: " + index.files.length + " files in " + index.roots.length + " roots · indexed " + (indexedAt || "not yet")) + (IndexModel.barRecency(recencyCounts) ? " · " + IndexModel.barRecency(recencyCounts) : "")
     visible: true
     implicitWidth: button.implicitWidth
     implicitHeight: button.implicitHeight
@@ -615,6 +615,7 @@ Panel {
         bar: root.bar
         text: "󰈙"
         tooltipText: root.barStatus
+        Accessible.name: "Markdown Atlas"
         active: root.opened
         onPressed: function (buttonCode) {
             if (buttonCode === Qt.LeftButton)

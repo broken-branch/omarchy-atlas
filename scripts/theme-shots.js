@@ -3,9 +3,27 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
 const {CDPClient, selectTarget} = require('../tests/smoke/probe_browser.js');
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+function fixtureToken(serverURL, configHome) {
+  if (!configHome || !path.isAbsolute(configHome)) throw Error('Fixture config directory is required');
+  const origin = new URL(serverURL);
+  if (origin.protocol !== 'http:' || origin.hostname !== '127.0.0.1' || !origin.port || origin.username || origin.password || origin.pathname !== '/' || origin.search || origin.hash)
+    throw Error('Fixture server must use a 127.0.0.1 HTTP origin with an explicit port');
+  const secret = Buffer.from(fs.readFileSync(path.join(configHome, 'omarchy-atlas/server-secret'), 'utf8'), 'hex');
+  return crypto.createHmac('sha256', secret).update(`atlas-browser\n127.0.0.1:${origin.port}`).digest('hex');
+}
+
+async function installFixtureToken(client, serverURL, configHome) {
+  const token = fixtureToken(serverURL, configHome);
+  await client.command('Page.enable');
+  await client.command('Page.addScriptToEvaluateOnNewDocument',
+    {source:`sessionStorage.setItem('atlas-browser-token', ${JSON.stringify(token)});`});
+  return token;
+}
 
 async function pageClient(cdpURL, serverURL, getTargets = async url => (await (await fetch(`${url}/json/list`)).json()), connect = async target => {
   const socket = new WebSocket(target.webSocketDebuggerUrl);
@@ -22,7 +40,7 @@ async function pageClient(cdpURL, serverURL, getTargets = async url => (await (a
     } catch { /* Chromium may still be starting. */ }
     await sleep(100);
   }
-  throw Error(`No Atlas page target starts with ${serverURL}`);
+  throw Error(`No Markdown Atlas page target starts with ${serverURL}`);
 }
 
 function parseCaptureArgs(args) {
@@ -115,6 +133,7 @@ async function run(args, dependencies = {}) {
   const ready = (expression, label) => waitFor(client, expression, label, 200, pause, explain);
   try {
     await client.command('Runtime.enable');
+    const token = dependencies.token || await installFixtureToken(client, serverURL, dependencies.configHome);
     await client.command('Emulation.setFocusEmulationEnabled', {enabled:true});
     await client.command('Emulation.setDeviceMetricsOverride', {width:size.width, height:size.height, deviceScaleFactor:scale, mobile:false});
     await client.command('Page.navigate', {url:`${serverURL}/map`});
@@ -123,7 +142,7 @@ async function run(args, dependencies = {}) {
     await ready('window.atlasProbe?.map?.cooled === true', 'map layout');
     await waitForCamera(client, pause);
     const actual = await client.evaluate("getComputedStyle(document.documentElement).getPropertyValue('--background')");
-    const index = await (await (dependencies.fetch || fetch)(`${serverURL}/api/index`)).json();
+    const index = await (await (dependencies.fetch || fetch)(`${serverURL}/api/index`, {headers:{Authorization:`Bearer ${token}`}})).json();
     const file = readTarget ? (() => { const [root, ...parts] = readTarget.split('/'); return index.files.find(item => item.root === root && item.path === parts.join('/')); })()
       : index.files.find(item => item.root === rootNames[0] && item.path === 'README.md') || index.files.find(item => item.root === rootNames[0] && /\.md$/i.test(item.path));
     if (!file) throw Error(readTarget ? `Reader target not indexed: ${readTarget}` : 'First root has no README.md or Markdown file for the reader screenshot');
@@ -159,10 +178,11 @@ if (require.main === module) {
     fs.writeFileSync(args[2], JSON.stringify(result, null, 2) + '\n');
     if (!result.allColourMatches) process.exitCode = 1;
   } else {
-    run(args).then(row => {
+    if (args[0] !== '--config-home' || !args[1]) throw Error('Fixture config directory is required');
+    run(args.slice(2), {configHome:args[1]}).then(row => {
       process.stdout.write(JSON.stringify(row) + '\n');
     }).catch(error => { console.error(error); process.exitCode = 1; });
   }
 }
 
-module.exports = {pageClient, summary, summaryRow, parseCaptureArgs, viewList, run, waitFor, waitForCamera, capture, sleep};
+module.exports = {pageClient, summary, summaryRow, parseCaptureArgs, viewList, run, waitFor, waitForCamera, capture, sleep, installFixtureToken};

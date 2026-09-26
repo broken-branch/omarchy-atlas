@@ -5,9 +5,28 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
-const {pageClient, summary, summaryRow, parseCaptureArgs, viewList, run, waitFor, waitForCamera} = require('../../scripts/theme-shots.js');
+const {pageClient, summary, summaryRow, parseCaptureArgs, viewList, run, waitFor, waitForCamera, installFixtureToken} = require('../../scripts/theme-shots.js');
 
-test('theme shots selects Atlas page after Chromium welcome tab', async () => {
+test('fixture capture enables Page before installing the origin token', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-capture-auth-'));
+  try {
+    fs.mkdirSync(path.join(directory, 'omarchy-atlas'));
+    fs.writeFileSync(path.join(directory, 'omarchy-atlas/server-secret'), 'ab'.repeat(32));
+    const calls = [];
+    const token = await installFixtureToken({command:async (...args) => calls.push(args)}, 'http://127.0.0.1:4188', directory);
+    assert.equal(calls[0][0], 'Page.enable');
+    assert.equal(calls[1][0], 'Page.addScriptToEvaluateOnNewDocument');
+    assert.match(calls[1][1].source, /sessionStorage\.setItem\('atlas-browser-token'/);
+    assert.ok(calls[1][1].source.includes(token));
+    assert.ok(!calls[1][1].source.includes('ab'.repeat(32)));
+    await assert.rejects(installFixtureToken({command:async () => {}}, 'http://127.0.0.1:4188'), /Fixture config directory/);
+    await assert.rejects(installFixtureToken({command:async () => {}}, 'https://example.test:4188', directory), /127.0.0.1 HTTP origin/);
+  } finally {
+    fs.rmSync(directory, {recursive:true, force:true});
+  }
+});
+
+test('theme shots selects Markdown Atlas page after Chromium welcome tab', async () => {
   const selected = [];
   const client = await pageClient('http://cdp', 'http://127.0.0.1:4567', async () => [
     {type:'page', url:'chrome-extension://welcome', id:'welcome'},
@@ -42,6 +61,9 @@ test('theme shots names map, reader, and neighbourhood views per theme', () => {
 
 test('theme shots navigates and captures map, reader, and indexed neighbourhood through CDP', async () => {
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-theme-shots-'));
+  const configHome = path.join(out, 'config');
+  fs.mkdirSync(path.join(configHome, 'omarchy-atlas'), {recursive:true});
+  fs.writeFileSync(path.join(configHome, 'omarchy-atlas/server-secret'), 'cd'.repeat(32));
   const commands = [], evaluations = [], captures = [];
   const probe = {view:'', target:null, map:null};
   const context = {
@@ -95,16 +117,17 @@ test('theme shots navigates and captures map, reader, and indexed neighbourhood 
     ]
   };
   try {
-    const row = await run(['light','#f5f1e8','http://atlas','http://cdp',out,'1920x1080','2','', '/workspace/alpha','/workspace/beta'], {
+    const row = await run(['light','#f5f1e8','http://127.0.0.1:4188','http://cdp',out,'1920x1080','2','', '/workspace/alpha','/workspace/beta'], {
+      configHome,
       pageClient:async () => client,
       fetch:async () => ({json:async () => index}),
       sleep:async () => {}
     });
     const navigations = commands.filter(item => item.method === 'Page.navigate').map(item => item.params.url);
     assert.deepEqual(navigations, [
-      'http://atlas/map',
-      'http://atlas/read/alpha/README.md',
-      'http://atlas/read/beta/guide.md'
+      'http://127.0.0.1:4188/map',
+      'http://127.0.0.1:4188/read/alpha/README.md',
+      'http://127.0.0.1:4188/read/beta/guide.md'
     ]);
     assert.equal(evaluations.some(expression => expression.includes("neighbourhood-button") && expression.includes('click')), true);
     assert.equal(commands.filter(item => item.method === 'Page.captureScreenshot').length, 3);
@@ -119,7 +142,7 @@ test('theme shots navigates and captures map, reader, and indexed neighbourhood 
       ['Page.bringToFront', 'Page.bringToFront', 'Page.captureScreenshot', 'Page.bringToFront', 'Page.bringToFront', 'Page.captureScreenshot',
         'Page.bringToFront', 'Page.bringToFront', 'Page.captureScreenshot']);
     // A fresh profile's extension welcome tab can take the foreground; a hidden
-    // tab gets no animation frames, so every navigation brings Atlas forward.
+    // tab gets no animation frames, so every navigation brings Markdown Atlas forward.
     const methods = commands.map(item => item.method);
     assert.equal(methods.every((method, index) => method !== 'Page.navigate' || methods[index + 1] === 'Page.bringToFront'), true);
     assert.equal(methods.includes('Emulation.setFocusEmulationEnabled'), true);
@@ -171,6 +194,7 @@ test('theme shots waits for the cooled map camera to settle before capture', asy
   };
   try {
     await run(['dark','#000000','http://atlas','http://cdp',out,'1600x1000','1','','/workspace/alpha','/workspace/beta'], {
+      token:'fixture',
       pageClient:async () => client,
       fetch:async () => ({json:async () => ({files:[{root:'alpha', path:'README.md'}, {root:'beta', path:'guide.md'}],
         references:[{from:{root:'alpha', path:'README.md'}, to:{root:'beta', path:'guide.md'}}]})}),
@@ -228,6 +252,7 @@ test('a neighbourhood that never settles reports the probe twice and the page er
   const out = fs.mkdtempSync(path.join(os.tmpdir(), 'atlas-theme-shots-'));
   try {
     const failure = await run(['dark','#000000','http://atlas','http://cdp',out,'1600x1000','1','','/workspace/alpha','/workspace/beta'], {
+      token:'fixture',
       pageClient:async () => client, sleep:async ms => { pauses.push(ms); },
       fetch:async () => ({json:async () => ({files:[{root:'alpha', path:'README.md'}, {root:'beta', path:'guide.md'}],
         references:[{from:{root:'alpha', path:'README.md'}, to:{root:'beta', path:'guide.md'}}]})})

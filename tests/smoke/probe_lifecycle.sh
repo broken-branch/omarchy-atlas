@@ -43,7 +43,7 @@ try:
     hypr_clients = json.loads(clients["stdout"]) if clients["ok"] else []
 except json.JSONDecodeError:
     hypr_clients = []
-atlas_title_clients = [client for client in hypr_clients if client.get("title") == "Atlas Reader"]
+atlas_title_clients = [client for client in hypr_clients if client.get("title") == "Markdown Atlas Reader"]
 try:
     layer_tree = json.loads(layers["stdout"]) if layers["ok"] else {}
 except json.JSONDecodeError:

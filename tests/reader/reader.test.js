@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const root = path.join(__dirname, '../..');
-const source = fs.readFileSync(path.join(root, 'reader/app.js'), 'utf8');
+const auth = fs.readFileSync(path.join(root, 'reader/auth.js'), 'utf8');
+const source = fs.readFileSync(path.join(root, 'reader/app.js'), 'utf8').replace('./auth.js', 'data:text/javascript;base64,' + Buffer.from(auth).toString('base64'));
 const app = import('data:text/javascript;base64,' + Buffer.from(source).toString('base64'));
 
 test('recency boundaries and open editor override use browser time', async () => {
@@ -52,6 +53,31 @@ test('assets stay within raw root and unsafe protocols are refused', async () =>
   assert.equal(assetURL(target, '../../secret.txt'), '');
   assert.equal(assetURL(target, 'javascript:alert(1)'), '');
   assert.equal(assetURL(target, '//remote/image.png'), '');
+});
+
+test('authenticated SVG image bytes are rasterized before an object URL can expose them', async () => {
+  const {createImageURL} = await app;
+  const source = new Blob(['<svg xmlns="http://www.w3.org/2000/svg"><script>top.location="https://evil.invalid"</script></svg>'], {type:'image/svg+xml'});
+  let drawn, closed = false;
+  global.createImageBitmap = async blob => {
+    assert.equal(blob, source);
+    return {width:20, height:10, close() { closed = true; }};
+  };
+  global.document = {createElement(name) {
+    assert.equal(name, 'canvas');
+    return {width:0, height:0, getContext() { return {drawImage(bitmap, x, y) { drawn = [bitmap.width, bitmap.height, x, y]; }}; },
+      toBlob(callback, type) { callback(new Blob(['raster pixels'], {type})); }};
+  }};
+  let exposed;
+  const original = URL.createObjectURL;
+  URL.createObjectURL = blob => { exposed = blob; return 'blob:fixture'; };
+  const objectURL = await createImageURL(source);
+  assert.deepEqual(drawn, [20, 10, 0, 0]);
+  assert.equal(objectURL, 'blob:fixture');
+  assert.equal(exposed.type, 'image/png');
+  assert.equal(closed, true);
+  URL.createObjectURL = original;
+  delete global.createImageBitmap; delete global.document;
 });
 
 test('real pinned renderer handles constructs and backend link identities', async () => {
@@ -120,14 +146,18 @@ test('binary response renders only its byte count instead of passing bytes to th
 
 test('stylesheet load precedes redraw; failure retains last usable stylesheet', async () => {
   const {replaceTheme} = await app;
+  const originalFetch = global.fetch;
   for (const fail of [false, true]) {
     const calls = []; let next;
-    const old = {after(node) { next = node; calls.push('append'); queueMicrotask(() => fail ? node.onerror() : node.onload()); }, remove() { calls.push('remove-old'); }};
-    const doc = {getElementById: () => old, createElement: () => ({remove() { calls.push('remove-new'); }})};
+    global.sessionStorage = {getItem:() => 'fixture'};
+    global.fetch = async () => ({ok:!fail, text:async () => ':root { color: red; }'});
+    const old = {after(node) { next = node; calls.push('append'); }, remove() { calls.push('remove-old'); }};
+    const doc = {getElementById: () => old, createElement: () => ({})};
     const promise = replaceTheme(doc, () => calls.push('redraw'));
-    if (fail) { await assert.rejects(promise, /retaining previous/); assert.deepEqual(calls, ['append', 'remove-new']); }
+    if (fail) { await assert.rejects(promise, /retaining previous/); assert.deepEqual(calls, []); }
     else { await promise; assert.equal(next.id, 'theme'); assert.deepEqual(calls, ['append', 'remove-old', 'redraw']); }
   }
+  global.fetch = originalFetch;
 });
 
 test('every child of the reading column shares one width independent of its own font', () => {

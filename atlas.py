@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Atlas command-line entry point."""
+"""Markdown Atlas command-line entry point."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from typing import Any, Mapping
 from urllib.parse import quote, urlsplit
 
 import atlas_analyze
+import atlas_auth
 import atlas_index
 import atlas_serve
 
@@ -51,7 +52,7 @@ def _json_option(parser: argparse.ArgumentParser) -> None:
 
 
 def parser() -> Parser:
-    result = Parser(prog="atlas", allow_abbrev=False)
+    result = Parser(prog="atlas", description="Markdown Atlas command line", allow_abbrev=False)
     _json_option(result)
     commands = result.add_subparsers(dest="command", required=True)
 
@@ -192,13 +193,31 @@ def _server_url() -> str:
     return os.environ.get("ATLAS_SERVER_URL", "http://127.0.0.1:4137").rstrip("/")
 
 
+def _server_credential() -> bytes:
+    split = urlsplit(_server_url())
+    if split.scheme != "http" or split.hostname != "127.0.0.1" or split.path or split.query or split.fragment or split.username or split.port is None:
+        raise CliError("server_unavailable", "server URL must be a loopback HTTP origin")
+    if "ATLAS_SERVER_URL" in os.environ:
+        supplied = os.environ.get("ATLAS_TEST_SERVER_SECRET", "")
+        if len(supplied) != 64:
+            raise CliError("server_unavailable", "server override needs an explicit test credential")
+        try:
+            return bytes.fromhex(supplied)
+        except ValueError as exc:
+            raise CliError("server_unavailable", "invalid test credential") from exc
+    if split.port != 4137:
+        raise CliError("server_unavailable", "unexpected server port")
+    return atlas_auth.server_secret(atlas_auth.secret_path(), create=True)
+
+
 def _post_show(root: str, relative: str, view: str) -> int | None:
     split = urlsplit(_server_url())
+    secret = _server_credential()
     connection = http.client.HTTPConnection(split.hostname, split.port, timeout=2)
     body = json.dumps({"root": root, "path": relative, "view": view}).encode("utf-8")
     try:
         connection.request("POST", (split.path.rstrip("/") + "/api/show") or "/api/show",
-                           body, {"Content-Type": "application/json"})
+                           body, {"Content-Type": "application/json", "Authorization": "Bearer " + secret.hex()})
         response = connection.getresponse()
         data = response.read()
     except (OSError, http.client.HTTPException):
@@ -281,9 +300,12 @@ def dispatch(args: argparse.Namespace) -> Any:
         view = "map" if args.map else "read"
         clients = _post_show(args.root, file["path"], view)
         if clients is None or clients == 0:
-            url = f"{_server_url()}/{view}/{quote(args.root, safe='')}/{quote(file['path'], safe='/')}"
+            target = f"/{view}/{quote(args.root, safe='')}/{quote(file['path'], safe='/')}"
+            secret = _server_credential()
+            cache_path = atlas_index.state_paths()[1]
+            bootstrap = atlas_auth.bootstrap_file(cache_path, secret, target, _server_url())
             try:
-                atlas_serve.launch_webapp(url)
+                atlas_serve.launch_webapp(bootstrap.as_uri())
             except atlas_serve.ServeError as exc:
                 raise CliError("server_unavailable", exc.message) from exc
         return {"clients": 0 if clients is None else clients}

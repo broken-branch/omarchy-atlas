@@ -59,7 +59,8 @@ class ThemeTests(unittest.TestCase):
                 thread.start()
                 try:
                     connection = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=3)
-                    connection.request("GET", "/theme.css")
+                    connection.request("GET", "/theme.css",
+                                       headers={"Authorization": "Bearer " + server.state.secret.hex()})
                     response = connection.getresponse()
                     css = response.read().decode()
                     connection.close()

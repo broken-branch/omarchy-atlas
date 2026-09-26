@@ -10,3 +10,38 @@ force-graph.min.js (force-graph 1.51.4, MIT) bundles:
 - kapsule, accessor-fn, index-array-by, float-tooltip and
   canvas-color-tracker (MIT), bezier-js (MIT), lodash-es (MIT),
   @tweenjs/tween.js (MIT)
+
+The upstream dependency releases include these additional copyright notices:
+
+Copyright 2010-2023 Mike Bostock (d3-array)
+Copyright 2010-2021 Mike Bostock (d3-drag, d3-scale, d3-selection, d3-zoom)
+Copyright 2010-2024 Mike Bostock (d3-scale-chromatic)
+Copyright 2002 Cynthia Brewer, Mark Harrower, and The Pennsylvania State University (d3-scale-chromatic)
+Copyright (c) 2017 Vasco Asturiano (accessor-fn, kapsule, d3-force-3d)
+Copyright (c) 2018 Vasco Asturiano (canvas-color-tracker, index-array-by)
+Copyright (c) 2022 Vasco Asturiano (float-tooltip)
+Copyright (c) 2010-2012 Tween.js authors (@tweenjs/tween.js)
+Copyright (c) 2001 Robert Penner http://robertpenner.com/easing/ (@tweenjs/tween.js)
+Pomax, identified as the author in bezier-js 6.1.4 package metadata.
+Copyright OpenJS Foundation and other contributors <https://openjsf.org/> (lodash-es)
+Based on Underscore.js, copyright Jeremy Ashkenas, DocumentCloud and
+Investigative Reporters & Editors <http://underscorejs.org/> (lodash-es)
+
+The bundled d3 modules are ISC licensed. The upstream ISC license text is:
+
+Permission to use, copy, modify, and/or distribute this software for any purpose
+with or without fee is hereby granted, provided that the above copyright notice
+and this permission notice appear in all copies.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS
+OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
+TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+THIS SOFTWARE.
+
+The MIT grant, conditions and disclaimer for the listed MIT components are
+reproduced in LICENSE.force-graph. The upstream attribution lines above are
+from the exact force-graph 1.51.4 dependency versions documented in
+docs/audits/2026-09-26-vendor-notices.md.

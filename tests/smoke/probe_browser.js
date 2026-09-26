@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /*
  * Read-only Chromium CDP probe. Launch the reader first:
- * omarchy-launch-or-focus-webapp 'Atlas Reader' http://127.0.0.1:4137/ --remote-debugging-port=9222
+ * omarchy-launch-or-focus-webapp 'Markdown Atlas Reader' http://127.0.0.1:4137/ --remote-debugging-port=9222
  * before invoking this script. It needs Node 24's built-in WebSocket only.
  */
 'use strict';
 
 const CDP_URL = process.env.ATLAS_CDP || 'http://127.0.0.1:9222';
-const PAGE_PREFIX = 'http://127.0.0.1:4137/';
+const PAGE_PREFIX = process.env.ATLAS_PAGE_PREFIX || 'http://127.0.0.1:4137/';
 
 function selectTarget(targets, prefix = PAGE_PREFIX) {
   return targets.find(target => target.type === 'page' && typeof target.url === 'string' && target.url.startsWith(prefix)) || null;
@@ -240,6 +240,12 @@ async function nav(client, root, path) {
     forward:{view:forwardView, viewRestored:sameMapView(forwardView, mapView)}
   };
 }
+async function shownTarget(client, root, path, title) {
+  const target = JSON.stringify({root, path});
+  await waitFor(client, `window.atlasProbe?.view === 'read' && JSON.stringify(window.atlasProbe?.target) === ${JSON.stringify(target)} && document.getElementById('document-title')?.textContent === ${JSON.stringify(title)}`,
+    `${root}/${path} displayed by the reader`, 10000);
+  return {root, path, displayed:true};
+}
 async function main(argv = process.argv.slice(2), dependencies = {}) {
   const [command, value, path] = argv;
   const client = await (dependencies.pageClient || pageClient)();
@@ -252,8 +258,9 @@ async function main(argv = process.argv.slice(2), dependencies = {}) {
     if (command === 'layout' && /^\d+$/.test(value || '') && Number(value) > 0) return {probe:'browser-layout', count:Number(value), ...(await layouts(client, Number(value)))};
     if (command === 'pan' && Number(value) > 0) return {probe:'browser-pan', seconds:Number(value), ...(await pan(client, Number(value)))};
     if (command === 'nav' && value && path) return {probe:'browser-nav', ...(await navigate(client, value, path))};
-    throw Error('Usage: probe_browser.js <state|key KEYS|shot FILE [WIDTH] [HEIGHT]|controls|layout N|pan SECONDS|nav ROOT PATH>');
+    if (command === 'target' && value && path && argv[3]) return {probe:'browser-target', ...(await shownTarget(client, value, path, argv[3]))};
+    throw Error('Usage: probe_browser.js <state|key KEYS|shot FILE [WIDTH] [HEIGHT]|controls|layout N|pan SECONDS|nav ROOT PATH|target ROOT PATH TITLE>');
   } finally { client.socket.close(); }
 }
 if (require.main === module) main().then(result => console.log(JSON.stringify(result))).catch(error => { console.log(JSON.stringify({probe:'browser', error:error.message})); process.exitCode = 1; });
-module.exports = {CDPClient, aggregate, controls, key, main, nav, percentile, sameMapView, selectTarget, settledMeasurement, shot, waitForSettle};
+module.exports = {CDPClient, aggregate, controls, key, main, nav, percentile, sameMapView, selectTarget, settledMeasurement, shownTarget, shot, waitForSettle};

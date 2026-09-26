@@ -18,6 +18,7 @@ import time
 import unittest
 
 import atlas_index
+import atlas_auth
 import atlas_serve
 
 
@@ -57,9 +58,13 @@ class CliTests(unittest.TestCase):
             "PATH": str(self.launchers) + os.pathsep + self.env.get("PATH", ""),
             "ATLAS_ARGV_LOG": str(self.argv_log),
             "PYTHONDONTWRITEBYTECODE": "1",
-            # A closed port: the desktop runner has the installed Atlas server on 4137.
+            # A closed port: the desktop runner has the installed Markdown Atlas server on 4137.
             "ATLAS_SERVER_URL": f"http://127.0.0.1:{closed_socket.getsockname()[1]}",
         })
+
+    def _test_credential(self) -> None:
+        credential = atlas_auth.server_secret(atlas_auth.secret_path(self.config_home / "omarchy-atlas/config.json"), create=True)
+        self.env["ATLAS_TEST_SERVER_SECRET"] = credential.hex()
 
     def run_cli(self, *arguments: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
         return subprocess.run([sys.executable, "-B", str(ATLAS), *arguments], cwd=PROJECT,
@@ -717,6 +722,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(reply["data"]["unavailable"][0]["reason"], "impact map unreadable")
 
     def test_edit_and_show_launchers_preserve_spaces_unicode_and_argv(self) -> None:
+        self._test_credential()
         self.add_root()
         result, reply = self.reply("edit", "--root", "Demo Ω", "--path", "docs/guide.md")
         self.assertEqual((result.returncode, reply["data"]), (0, {"opened": True}))
@@ -742,8 +748,10 @@ class CliTests(unittest.TestCase):
         result, reply = self.reply("show", "--root", "Demo Ω", "--path", "docs/guide.md", "--map", env=env)
         self.assertEqual((result.returncode, reply["data"]), (0, {"clients": 0}))
         launched = self.launcher_rows()[1]
-        self.assertEqual(launched[0], "Atlas Reader")
-        self.assertIn("/map/Demo%20%CE%A9/docs/guide.md", launched[1])
+        self.assertEqual(launched[0], "Markdown Atlas Reader")
+        self.assertTrue(launched[1].startswith("file://"))
+        self.assertNotIn(self.env["ATLAS_TEST_SERVER_SECRET"], launched[1])
+        self.assertIn("/map/Demo%20%CE%A9/docs/guide.md", Path(launched[1][7:]).read_text(encoding="utf-8"))
         self.assertNotEqual(child_state.read_text(encoding="utf-8"), "finished")
         streams = json.loads(stdio_log.read_text(encoding="utf-8"))
         self.assertEqual(streams, {"stdoutPipe": False, "stderrPipe": False})
@@ -753,6 +761,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(child_state.read_text(encoding="utf-8"), "finished")
 
     def test_launcher_failures_keep_server_unavailable_cli_error(self) -> None:
+        self._test_credential()
         self.add_root()
         env = dict(self.env)
         env["ATLAS_LAUNCH_EXIT"] = "7"
@@ -761,6 +770,17 @@ class CliTests(unittest.TestCase):
             self.assertEqual((result.returncode, reply["ok"], reply["code"]),
                              (0, False, "server_unavailable"))
 
+    def test_show_refuses_server_override_without_explicit_test_credential(self) -> None:
+        self.add_root()
+        env = dict(self.env)
+        result, reply = self.reply("show", "--root", "Demo Ω", "--path", "docs/guide.md", env=env)
+        self.assertEqual((result.returncode, reply["code"]), (0, "server_unavailable"))
+        env["ATLAS_SERVER_URL"] = "http://attacker.example:4137"
+        env["ATLAS_TEST_SERVER_SECRET"] = "a" * 64
+        result, reply = self.reply("show", "--root", "Demo Ω", "--path", "docs/guide.md", env=env)
+        self.assertEqual((result.returncode, reply["code"]), (0, "server_unavailable"))
+        self.assertFalse(self.argv_log.exists())
+
     def _stop_server(self, server: atlas_serve.AtlasHTTPServer, thread: threading.Thread) -> None:
         server.shutdown()
         server.server_close()
@@ -768,6 +788,7 @@ class CliTests(unittest.TestCase):
         self.assertFalse(thread.is_alive())
 
     def test_serve_command_runs_real_ephemeral_http_server(self) -> None:
+        self._test_credential()
         self.add_root()
         process = subprocess.Popen([sys.executable, "-B", str(ATLAS), "serve", "--port", "0"],
                                    cwd=PROJECT, env=self.env, stdout=subprocess.PIPE,
@@ -780,7 +801,7 @@ class CliTests(unittest.TestCase):
         while time.monotonic() < deadline:
             try:
                 connection = http.client.HTTPConnection("127.0.0.1", port, timeout=0.2)
-                connection.request("GET", "/api/index")
+                connection.request("GET", "/api/index", headers={"Authorization": "Bearer " + self.env["ATLAS_TEST_SERVER_SECRET"]})
                 response = connection.getresponse()
                 body = response.read()
                 connection.close()

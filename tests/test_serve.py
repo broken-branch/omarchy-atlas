@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.client
+import html
 import json
 import os
 from pathlib import Path
@@ -11,12 +12,15 @@ import subprocess
 import sys
 import tempfile
 import socket
+import re
 import threading
 import time
 import unittest
+from urllib.parse import urlencode
 from unittest import mock
 
 import atlas_index
+import atlas_auth
 import atlas_serve
 
 
@@ -78,6 +82,7 @@ class ServeTests(unittest.TestCase):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
         encoded = None if body is None else json.dumps(body).encode("utf-8")
         request_headers = dict(headers or {})
+        request_headers.setdefault("Authorization", "Bearer " + self.server.state.secret.hex())
         if encoded is not None:
             request_headers.setdefault("Content-Type", "application/json")
         connection.request(method, path, encoded, request_headers)
@@ -89,7 +94,7 @@ class ServeTests(unittest.TestCase):
     def event_client(self) -> tuple[http.client.HTTPConnection, http.client.HTTPResponse]:
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
         self.addCleanup(connection.close)
-        connection.request("GET", "/api/events")
+        connection.request("GET", "/api/events", headers={"Authorization": "Bearer " + self.server.state.secret.hex()})
         response = connection.getresponse()
         self.assertEqual(response.status, 200)
         self.assertEqual(response.getheader("Content-Type"), "text/event-stream")
@@ -108,6 +113,101 @@ class ServeTests(unittest.TestCase):
                     return data
                 event = None
         self.fail(f"did not receive {wanted} event")
+
+    def bootstrap_request(self, fields: dict[str, str]) -> tuple[int, dict[str, str], bytes]:
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=3)
+        body = urlencode(fields)
+        connection.request("POST", "/auth/bootstrap", body,
+                           {"Content-Type": "application/x-www-form-urlencoded", "Origin": "null",
+                            "Sec-Fetch-Site": "cross-site"})
+        response = connection.getresponse()
+        result = (response.status, {key.lower(): value for key, value in response.getheaders()}, response.read())
+        connection.close()
+        return result
+
+    def test_auth_denies_every_route_before_state_or_actions(self) -> None:
+        for path in ("/theme.css", "/api/index", "/api/file?root=demo&path=docs/guide.md",
+                     "/raw/demo/docs/guide.md", "/api/events", "/missing"):
+            status, headers, body = self.request("GET", path, headers={"Authorization": ""})
+            self.assertEqual((path, status, headers["cache-control"]), (path, 401, "no-store"))
+            self.assertNotIn(b"Guide", body)
+        for path in ("/api/show", "/api/edit", "/missing"):
+            self.assertEqual(self.request("POST", path, {"root": "demo", "path": "docs/guide.md"},
+                                          headers={"Authorization": ""})[0], 401)
+        self.assertIsNone(self.server.state.index)
+        self.assertEqual(self.server.state.client_count(), 0)
+        self.assertFalse(self.launch_log.exists())
+        self.assertEqual(self.request("GET", "/api/index", headers={"Authorization": "Bearer invalid"})[0], 401)
+        for path in ("/", "/read/demo/docs/guide.md", "/map", "/app.js"):
+            status, _headers, body = self.request("GET", path, headers={"Authorization": "", "Cookie": "atlas_session=stolen"})
+            self.assertEqual(status, 200)
+            self.assertNotIn(b"Guide", body)
+
+    def test_browser_bootstrap_port_scope_replay_expiry_and_csrf(self) -> None:
+        target = "/read/demo/docs/guide.md"
+        file = atlas_auth.bootstrap_file(self.cache, self.server.state.secret, target,
+                                         f"http://127.0.0.1:{self.port}")
+        self.assertEqual(file.stat().st_mode & 0o777, 0o600)
+        page = file.read_text(encoding="utf-8")
+        fields = {key: html.unescape(value) for key, value in re.findall(r'name="([^"]+)" value="([^"]+)"', page)}
+        status, headers, _body = self.bootstrap_request(fields)
+        self.assertEqual(status, 200)
+        token = atlas_auth.browser_token(self.server.state.secret, self.port)
+        self.assertIn(token.encode(), _body)
+        self.assertNotIn("set-cookie", headers)
+        self.assertFalse(file.exists())
+        self.assertEqual(self.bootstrap_request(fields)[0], 401)
+        self.assertEqual(self.request("GET", "/api/index", headers={"Authorization": "", "Cookie": "atlas_session=stolen"})[0], 401)
+        self.assertEqual(self.request("GET", "/raw/demo/docs/guide.md", headers={"Authorization": "", "Cookie": "atlas_session=stolen"})[0], 401)
+        self.assertEqual(self.request("GET", "/api/index", headers={"Authorization": "Bearer " + token})[0], 200)
+        body = {"root": "demo", "path": "docs/guide.md", "view": "read"}
+        self.assertEqual(self.request("POST", "/api/show", body,
+                                      headers={"Authorization": "", "Cookie": "atlas_session=stolen", "Origin": f"http://127.0.0.1:{self.port}"})[0], 401)
+        self.assertEqual(self.request("POST", "/api/show", body,
+                                      headers={"Authorization": "Bearer " + token})[0], 403)
+        own = f"http://127.0.0.1:{self.port}"
+        self.assertEqual(self.request("POST", "/api/show", body,
+                                      headers={"Authorization": "Bearer " + token, "Origin": own})[0], 200)
+        self.assertEqual(self.request("POST", "/api/show", body,
+                                      headers={"Authorization": "Bearer " + token, "Origin": "http://evil.example"})[0], 403)
+        self.assertEqual(self.bootstrap_request({**fields, "nonce": "bad"})[0], 401)
+        expired = {**fields, "nonce": "a" * 48, "expires": str(int(time.time()) - 1)}
+        expired["signature"] = atlas_auth.signature(self.server.state.secret, expired["nonce"], int(expired["expires"]), target)
+        self.assertEqual(self.bootstrap_request(expired)[0], 401)
+        other = atlas_serve.create_server(port=0, config_path=self.config, cache_path=self.cache,
+                                           reader_dir=self.reader, theme_dir=self.theme, rounding_command=None)
+        restart_token = atlas_auth.browser_token(other.state.secret, other.server_address[1])
+        thread = threading.Thread(target=other.serve_forever)
+        thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", other.server_address[1], timeout=3)
+            connection.request("GET", "/api/index", headers={"Authorization": "Bearer " + token})
+            reply = connection.getresponse()
+            self.assertEqual(reply.status, 401)
+            reply.read(); connection.close()
+        finally:
+            other.shutdown(); other.server_close(); thread.join()
+        restarted = atlas_serve.create_server(port=other.server_address[1], config_path=self.config, cache_path=self.cache,
+                                               reader_dir=self.reader, theme_dir=self.theme, rounding_command=None)
+        restarted_thread = threading.Thread(target=restarted.serve_forever)
+        restarted_thread.start()
+        try:
+            connection = http.client.HTTPConnection("127.0.0.1", restarted.server_address[1], timeout=3)
+            connection.request("GET", "/api/index", headers={"Authorization": "Bearer " + restart_token})
+            reply = connection.getresponse()
+            self.assertEqual(reply.status, 200)
+            reply.read(); connection.close()
+        finally:
+            restarted.shutdown(); restarted.server_close(); restarted_thread.join()
+
+    def test_show_queued_before_reader_reconnect_is_delivered(self) -> None:
+        body = {"root": "demo", "path": "docs/guide.md", "view": "read"}
+        status, _headers, payload = self.request("POST", "/api/show", body)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(payload)["clients"], 0)
+        connection, response = self.event_client()
+        self.assertEqual(self.next_event(response, "show"), body)
+        connection.close()
 
     def test_failed_rebuild_exposes_stale_index_and_recovery(self) -> None:
         status, _headers, body = self.request("GET", "/api/index")
@@ -178,7 +278,7 @@ class ServeTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["file"]["path"], "docs/guide.md")
         self.assertEqual(self.request("GET", "/read/demo/docs/guide-alias.md")[0], 200)
-        self.assertEqual(self.request("GET", "/map/demo/docs/escape.md")[0], 403)
+        self.assertEqual(self.request("GET", "/map/demo/docs/escape.md")[0], 200)
 
     def test_unchanged_refresh_reuses_index_and_requests_do_not_wait_for_rebuild(self) -> None:
         state = self.server.state
@@ -360,7 +460,7 @@ class ServeTests(unittest.TestCase):
         (self.root / "leak.md").symlink_to(".env")
         (self.root / "docs" / "notes.md").symlink_to("../.env")
         for name in ("leak.md", "docs/notes.md"):
-            for path in ("/api/file?root=demo&path=" + name, "/raw/demo/" + name, "/read/demo/" + name, "/map/demo/" + name):
+            for path in ("/api/file?root=demo&path=" + name, "/raw/demo/" + name):
                 status, _headers, body = self.request("GET", path)
                 self.assertEqual((path, status, json.loads(body).get("code")), (path, 403, "denied"))
                 self.assertNotIn(b"DEMO_ONLY", body)
@@ -583,7 +683,7 @@ class ServeTests(unittest.TestCase):
         self.assertEqual(json.loads(self.launch_log.read_text(encoding="utf-8")), [str(self.root / "docs" / "guide.md")])
         url = "http://127.0.0.1:4137/read/Demo%20%CE%A9/docs/guide%20space.md"
         atlas_serve.launch_webapp(url, [sys.executable, str(FIXTURE / "record_launcher.py")])
-        self.assertEqual(json.loads(self.launch_log.read_text(encoding="utf-8")), ["Atlas Reader", url])
+        self.assertEqual(json.loads(self.launch_log.read_text(encoding="utf-8")), ["Markdown Atlas Reader", url])
 
     def test_disconnected_sse_client_is_dropped_within_one_refresh_tick(self) -> None:
         connection, response = self.event_client()

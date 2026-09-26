@@ -121,6 +121,33 @@ def state_paths(environ: Mapping[str, str] | None = None) -> tuple[Path, Path]:
             cache_home / "omarchy-atlas" / "index.json")
 
 
+def private_directory(path: Path) -> None:
+    """Create or narrow an Atlas-owned directory, without changing XDG parents."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+        raise IndexError("config_invalid", "Atlas state directory has unsafe owner or type")
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        path.chmod(0o700)
+
+
+def private_file(path: Path) -> bool:
+    """Validate and narrow an existing Atlas-owned regular file; reject links."""
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        return False
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid():
+        raise IndexError("config_invalid", "Atlas state file has unsafe owner or type")
+    if stat.S_IMODE(info.st_mode) != 0o600:
+        path.chmod(0o600)
+    return True
+
+
 def _canonical_directory(value: str | Path) -> Path:
     path = Path(value).expanduser()
     try:
@@ -133,7 +160,8 @@ def _canonical_directory(value: str | Path) -> Path:
 
 
 def _atomic_json(path: Path, value: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    private_directory(path.parent)
+    private_file(path)
     encoded = (json.dumps(value, ensure_ascii=True, sort_keys=True,
                           separators=(",", ":")) + "\n").encode("utf-8")
     descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -281,7 +309,8 @@ def _validate_config(value: Any) -> dict[str, Any]:
 def read_config(path: str | Path | None = None) -> dict[str, Any]:
     """Read and validate configured roots; a missing config is an empty one."""
     config_path = Path(path) if path is not None else state_paths()[0]
-    if not config_path.exists():
+    private_directory(config_path.parent)
+    if not private_file(config_path):
         return {"version": VERSION, "roots": []}
     try:
         with config_path.open(encoding="utf-8") as source:
@@ -1152,6 +1181,8 @@ def _validate_index(value: Any) -> dict[str, Any]:
 def read_cache(path: str | Path | None = None, diagnostics: list[str] | None = None) -> dict[str, Any] | None:
     """Read a valid cache, reporting corruption to an optional diagnostics list."""
     cache_path = Path(path) if path is not None else state_paths()[1]
+    private_directory(cache_path.parent)
+    private_file(cache_path)
     try:
         with cache_path.open(encoding="utf-8") as source:
             return _validate_index(json.load(source))

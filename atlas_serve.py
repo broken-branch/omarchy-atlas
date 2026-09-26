@@ -1,4 +1,4 @@
-"""Loopback HTTP, SSE, theme, and launcher support for Atlas.
+"""Loopback HTTP, SSE, theme, and launcher support for Markdown Atlas.
 
 This module deliberately has no import-time side effects.  ``create_server``
 is also the test seam: callers can supply temporary state and theme paths and
@@ -8,9 +8,11 @@ ask the OS for an ephemeral port.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import math
 import os
+import secrets
 from pathlib import Path, PurePosixPath
 import queue
 import re
@@ -25,6 +27,7 @@ from urllib.parse import parse_qs, unquote, urlsplit
 
 import atlas_index
 import atlas_analyze
+import atlas_auth
 
 INDEX_INTERVAL = atlas_index.REFRESH_SECONDS
 DELIVERY_TIMEOUT = 0.5
@@ -35,7 +38,7 @@ REQUEST_TIMEOUT = 30.0
 APP_ROOT = Path(__file__).resolve().parent
 PAGE_POLICY = "frame-ancestors 'none'"
 # A /raw response is a stranger's file: it renders as an image or text but
-# never runs script in the Atlas origin, even when opened as a page.
+# never runs script in the Markdown Atlas origin, even when opened as a page.
 RAW_POLICY = "sandbox; default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; frame-ancestors 'none'"
 IMAGE_TYPES = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"}
 
@@ -103,7 +106,7 @@ def _run_launcher(command: str | Sequence[str], *arguments: str, timeout: float 
 
 def launch_webapp(url: str, command: str | Sequence[str] = "omarchy-launch-or-focus-webapp") -> None:
     """Launch/focus the reader using its window pattern and URL arguments."""
-    _run_launcher(command, "Atlas Reader", url)
+    _run_launcher(command, "Markdown Atlas Reader", url)
 
 
 def launch_editor(path: str | Path, command: str | Sequence[str] = "omarchy-launch-editor") -> None:
@@ -345,6 +348,11 @@ class AtlasState:
                  editor_launcher: str | Sequence[str], interval: float = INDEX_INTERVAL,
                  rounding_command: str | Sequence[str] | None = ("hyprctl", "-j", "getoption", "decoration:rounding")):
         self.store = atlas_index.IndexStore(config_path, cache_path)
+        credential_path = atlas_auth.secret_path(Path(config_path) if config_path is not None else None)
+        self.secret = atlas_auth.server_secret(credential_path, create=True)
+        self.used_bootstraps: set[str] = set()
+        self.pending_show: Any = None
+        self.bootstrap_dir = (Path(cache_path) if cache_path is not None else atlas_index.state_paths()[1]).parent
         self.reader_dir = Path(reader_dir) if reader_dir is not None else APP_ROOT / "reader"
         home = Path(os.environ.get("HOME", str(Path.home())))
         self.theme_dir = Path(theme_dir) if theme_dir is not None else home / ".local/state/omarchy/current/theme"
@@ -383,6 +391,8 @@ class AtlasState:
         """Return only clients that wrote and flushed this show event."""
         with self.lock:
             clients = list(self.clients)
+            if not clients:
+                self.pending_show = data
         pending: list[tuple[queue.Queue[tuple[str, Any, queue.Queue[bool] | None]], queue.Queue[bool]]] = []
         for client in clients:
             delivered: queue.Queue[bool] = queue.Queue(maxsize=1)
@@ -402,12 +412,18 @@ class AtlasState:
                     self.remove_client(client)
             except queue.Empty:
                 self.remove_client(client)
+        if successful:
+            with self.lock:
+                self.pending_show = None
         return successful
 
     def add_client(self) -> queue.Queue[tuple[str, Any, queue.Queue[bool] | None]]:
         client: queue.Queue[tuple[str, Any, queue.Queue[bool] | None]] = queue.Queue(maxsize=32)
         with self.lock:
             self.clients.add(client)
+            if self.pending_show is not None:
+                client.put_nowait(("show", self.pending_show, None))
+                self.pending_show = None
         return client
 
     def remove_client(self, client: queue.Queue[tuple[str, Any, queue.Queue[bool] | None]]) -> None:
@@ -605,6 +621,17 @@ class AtlasHTTPServer(ThreadingHTTPServer):
         self.state = state
         super().__init__(address, AtlasRequestHandler)
 
+    def service_actions(self) -> None:
+        # serve_forever calls this periodically even without a reader.
+        try:
+            for path in self.state.bootstrap_dir.glob("bootstrap-*.html"):
+                if (re.fullmatch(r"bootstrap-[0-9a-f]{48}\.html", path.name)
+                        and path.is_file() and not path.is_symlink()
+                        and time.time() - path.stat().st_mtime > atlas_auth.BOOTSTRAP_LIFETIME + 5):
+                    path.unlink()
+        except OSError:
+            pass
+
 
 def _read_capped(path: Path) -> bytes:
     """Refuse an oversized file from its size, before reading any of it."""
@@ -627,25 +654,36 @@ class AtlasRequestHandler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Security-Policy", self.policy)
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
         super().end_headers()
 
-    def _check_origin(self, *, post: bool) -> None:
-        """Answer only Atlas's own origin: no DNS rebinding, no cross-site POST."""
+    def _host(self) -> set[str]:
         port = self.server.server_address[1]
         hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
         if self.headers.get("Host") not in hosts:
-            raise ServeError(HTTPStatus.FORBIDDEN, "request host is not Atlas")
-        if not post:
-            return
-        # application/json is not a CORS simple type, so a cross-site page
-        # needs a preflight that this server never answers.
-        if self.headers.get_content_type() != "application/json":
-            raise ServeError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "body must be application/json")
-        origin = self.headers.get("Origin")
-        if origin is not None and origin not in {"http://" + host for host in hosts}:
-            raise ServeError(HTTPStatus.FORBIDDEN, "cross-site request refused")
-        if self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
-            raise ServeError(HTTPStatus.FORBIDDEN, "cross-site request refused")
+            raise ServeError(HTTPStatus.FORBIDDEN, "request host is not Markdown Atlas")
+        return hosts
+
+    def _authorize(self, *, post: bool) -> str:
+        hosts = self._host()
+        bearer = self.headers.get("Authorization", "")
+        secret = self.server.state.secret.hex()
+        browser = atlas_auth.browser_token(self.server.state.secret, self.server.server_address[1])
+        method = ("bearer" if bearer.startswith("Bearer ") and hmac.compare_digest(bearer[7:], secret)
+                  else "browser" if bearer.startswith("Bearer ") and hmac.compare_digest(bearer[7:], browser)
+                  else "")
+        if not method:
+            raise ServeError(HTTPStatus.UNAUTHORIZED, "authentication required", "unauthorized")
+        if post:
+            if self.headers.get_content_type() != "application/json":
+                raise ServeError(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, "body must be application/json")
+            origin = self.headers.get("Origin")
+            if (origin is not None and origin not in {"http://" + host for host in hosts}) or (method == "browser" and origin is None):
+                raise ServeError(HTTPStatus.FORBIDDEN, "cross-site request refused")
+            if self.headers.get("Sec-Fetch-Site", "same-origin") != "same-origin":
+                raise ServeError(HTTPStatus.FORBIDDEN, "cross-site request refused")
+        return method
 
     def _send(self, status: int, body: bytes = b"", content_type: str = "text/plain; charset=utf-8",
               *, etag: str | None = None) -> None:
@@ -699,21 +737,23 @@ class AtlasRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         self.policy = PAGE_POLICY
         try:
-            self._check_origin(post=False)
             split = urlsplit(self.path)
             parts = _safe_url_parts(split.path)
             route = "/" + "/".join(parts)
+            public = route in {"/", "/map", "/app.js", "/auth.js", "/app.css", "/map.js", "/map.css"} or (parts and parts[0] in {"read", "map", "vendor"})
+            if public:
+                self._host()
+            else:
+                self._authorize(post=False)
             if route == "/":
                 self._app()
             elif parts and parts[0] == "read":
-                self._route_target(parts, 1)
                 self._app()
             elif route == "/map":
                 self._app()
             elif parts and parts[0] == "map":
-                self._route_target(parts, 1)
                 self._app()
-            elif route in {"/app.js", "/app.css", "/map.js", "/map.css"}:
+            elif route in {"/app.js", "/auth.js", "/app.css", "/map.js", "/map.css"}:
                 self._static(route.lstrip("/"))
             elif parts and parts[0] == "vendor" and len(parts) == 2:
                 self._static("vendor/" + parts[1])
@@ -793,7 +833,10 @@ class AtlasRequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         self.policy = PAGE_POLICY
         try:
-            self._check_origin(post=True)
+            if urlsplit(self.path).path == "/auth/bootstrap":
+                self._bootstrap()
+                return
+            self._authorize(post=True)
             route = "/" + "/".join(_safe_url_parts(urlsplit(self.path).path))
             if route not in {"/api/show", "/api/edit"}:
                 raise ServeError(HTTPStatus.NOT_FOUND, "route not found")
@@ -820,6 +863,52 @@ class AtlasRequestHandler(BaseHTTPRequestHandler):
             self._error(error)
         except (BrokenPipeError, ConnectionResetError):
             return
+
+    def _bootstrap(self) -> None:
+        self._host()
+        if self.headers.get_content_type() != "application/x-www-form-urlencoded":
+            raise ServeError(HTTPStatus.BAD_REQUEST, "invalid bootstrap")
+        if self.headers.get("Sec-Fetch-Site") not in {None, "cross-site", "none"}:
+            raise ServeError(HTTPStatus.FORBIDDEN, "invalid bootstrap origin")
+        if self.headers.get("Origin") not in {None, "null"}:
+            raise ServeError(HTTPStatus.FORBIDDEN, "invalid bootstrap origin")
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 1 <= length <= 2048:
+                raise ValueError
+            fields = parse_qs(self.rfile.read(length).decode("utf-8"), strict_parsing=True)
+            if set(fields) != {"nonce", "expires", "target", "signature"} or any(len(value) != 1 for value in fields.values()):
+                raise ValueError
+            nonce, target, mac = (fields[key][0] for key in ("nonce", "target", "signature"))
+            expires = int(fields["expires"][0])
+            if not re.fullmatch(r"[0-9a-f]{48}", nonce) or not re.fullmatch(r"[0-9a-f]{64}", mac):
+                raise ValueError
+            if not target.startswith(("/read/", "/map/")) or urlsplit(target).query or urlsplit(target).fragment:
+                raise ValueError
+        except (ValueError, UnicodeDecodeError):
+            raise ServeError(HTTPStatus.UNAUTHORIZED, "invalid bootstrap") from None
+        expected = atlas_auth.signature(self.server.state.secret, nonce, expires, target)
+        if not hmac.compare_digest(mac, expected) or expires < time.time() or expires > time.time() + atlas_auth.BOOTSTRAP_LIFETIME:
+            raise ServeError(HTTPStatus.UNAUTHORIZED, "invalid bootstrap")
+        with self.server.state.lock:
+            if nonce in self.server.state.used_bootstraps:
+                raise ServeError(HTTPStatus.UNAUTHORIZED, "invalid bootstrap")
+            self.server.state.used_bootstraps.add(nonce)
+        parts = _safe_url_parts(urlsplit(target).path)
+        if len(parts) < 3 or parts[0] not in {"read", "map"}:
+            raise ServeError(HTTPStatus.UNAUTHORIZED, "invalid bootstrap")
+        self.server.state.indexed_file(parts[1], "/".join(parts[2:]))
+        bootstrap = self.server.state.bootstrap_dir / f"bootstrap-{nonce}.html"
+        if bootstrap.is_file() and not bootstrap.is_symlink():
+            bootstrap.unlink()
+        token = atlas_auth.browser_token(self.server.state.secret, self.server.server_address[1])
+        script = ("sessionStorage.setItem('atlas-browser-token'," + json.dumps(token) + ");"
+                  "location.replace(" + json.dumps(target) + ");")
+        nonce_value = secrets.token_urlsafe(20)
+        self.policy = PAGE_POLICY + f"; script-src 'nonce-{nonce_value}'"
+        page = ("<!doctype html><meta charset=utf-8><title>Markdown Atlas Reader</title>"
+                f"<script nonce=\"{nonce_value}\">{script}</script>").encode()
+        self._send(HTTPStatus.OK, page, "text/html; charset=utf-8")
 
     def _events(self) -> None:
         client = self.server.state.add_client()
@@ -875,7 +964,7 @@ def create_server(*, port: int = 4137, config_path: str | Path | None = None,
                   editor_launcher: str | Sequence[str] = "omarchy-launch-editor",
                   refresh_interval: float = INDEX_INTERVAL,
                   rounding_command: str | Sequence[str] | None = ("hyprctl", "-j", "getoption", "decoration:rounding")) -> AtlasHTTPServer:
-    """Build, but do not start, an Atlas server bound only to IPv4 loopback."""
+    """Build, but do not start, a Markdown Atlas server bound only to IPv4 loopback."""
     state = AtlasState(config_path=config_path, cache_path=cache_path, reader_dir=reader_dir,
                        theme_dir=theme_dir, shell_override_path=shell_override_path,
                        editor_launcher=editor_launcher,

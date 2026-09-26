@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Atlas Reader</title>
-  <link id="theme" rel="stylesheet" href="/theme.css">
+  <title>Markdown Atlas Reader</title>
+  <style id="theme"></style>
   <link rel="stylesheet" href="/app.css">
   <script defer src="/vendor/markdown-it.min.js"></script>
   <script defer src="/vendor/highlight.min.js"></script>
@@ -13,7 +13,7 @@
 <body>
   <header id="toolbar" class="toolbar">
     <button id="back-button" disabled>← Back</button><button id="forward-button" disabled>Forward →</button>
-    <nav id="breadcrumb" aria-label="Location"><button id="atlas-button" class="crumb">Atlas</button><span id="crumb-tail"></span></nav>
+    <nav id="breadcrumb" aria-label="Location"><button id="atlas-button" class="crumb">Markdown Atlas</button><span id="crumb-tail"></span></nav>
     <div class="view-actions"><button id="files-button" aria-keyshortcuts="o">Files <span aria-hidden="true">o</span></button><button id="neighbourhood-button" aria-keyshortcuts="n" aria-pressed="false">Neighbourhood <span aria-hidden="true">n</span></button><button id="map-button" aria-keyshortcuts="m">Whole map <span aria-hidden="true">m</span></button></div>
     <button id="hide-toolbar" class="toolbar-toggle" aria-label="Hide top bar" aria-keyshortcuts="z" aria-expanded="true" aria-controls="toolbar" title="Hide top bar · z">⌃</button>
   </header>
